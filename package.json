@@ -6,7 +6,7 @@
     "dev": "concurrently -k \"npm:dev:client\" \"npm:dev:server\"",
     "dev:client": "vite",
     "dev:server": "node --watch server/index.mjs",
-    "test": "vitest run && node --test server/",
+    "test": "vitest run && node --test 'server/**/*.test.mjs'",
     "test:client": "vitest run",
     "test:server": "node --test server/",
     "build": "vite build"

@@ -52,7 +52,7 @@ test('POST /api/interpret forwards to openrouter with image content parts', asyn
 
 test('POST /api/interpret without key returns 500 and never calls fetch', async () => {
   let called = false;
-  const app = createServer({ fetchImpl: async () => { called = true; return jsonRes({}); } });
+  const app = createServer({ fetchImpl: async () => { called = true; return jsonRes({}); }, env: {} }); // env: {} isolates from dotenv-loaded process.env
   const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
   assert.equal(res.status, 500);
   assert.equal(called, false);
@@ -62,6 +62,48 @@ test('POST /api/interpret rejects non-data-uri image with 400', async () => {
   const app = withKeys(async () => jsonRes({}));
   const res = await inject(app, 'POST', '/api/interpret', { image: 'http://x/y.png' });
   assert.equal(res.status, 400);
+});
+
+test('POST /api/interpret surfaces HTTP-200-wrapped openrouter error after retrying', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    // what openrouter returns when the upstream vision provider times out:
+    // HTTP 200 with an error object inside
+    return jsonRes({ id: 'gen-1', error: { message: 'The operation was aborted', code: 504 } });
+  });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 502);
+  assert.match(res.body.error, /The operation was aborted/);
+  assert.equal(res.body.code, 504);
+  assert.equal(res.body.attempts, 3); // retried before giving up
+  assert.equal(calls, 3);
+});
+
+test('POST /api/interpret recovers when openrouter 200-error clears on retry', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    if (calls === 1) return jsonRes({ id: 'gen-1', error: { message: 'The operation was aborted', code: 504 } });
+    return jsonRes({ choices: [{ message: { content: 'Recovered.' } }] });
+  });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.text, 'Recovered.');
+  assert.equal(calls, 2);
+});
+
+test('POST /api/interpret does not retry non-transient openrouter 200-errors', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    return jsonRes({ error: { message: 'Model blocked by guardrail', code: 404 } });
+  });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 502);
+  assert.match(res.body.error, /Model blocked by guardrail/);
+  assert.equal(res.body.attempts, 1);
+  assert.equal(calls, 1);
 });
 
 test('POST /api/video/submit forwards to fal queue with merged extra params', async () => {
