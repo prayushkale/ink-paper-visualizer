@@ -113,7 +113,7 @@ export class Paper {
 
   /** Decoded blob size in bytes (must stay < 5MB for FAL data URIs). */
   async byteSize(): Promise<number> {
-    const blob = await new Promise<Blob>((res) => this.canvas.toBlob(res, 'image/png')!);
-    return blob.size;
+    const blob = await new Promise<Blob | null>((res) => this.canvas.toBlob(res, 'image/png'));
+    return blob?.size ?? 0;
   }
 }
