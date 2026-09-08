@@ -22,36 +22,57 @@ export function createServer({ fetchImpl = fetch, env = process.env } = {}) {
       return res.status(400).json({ error: 'image must be a data URI' });
     }
     try {
-      const r = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: model || 'google/gemini-2.5-flash',
-          messages: [
-            { role: 'user', content: [
-              { type: 'text', text: visionPrompt },
-              { type: 'image_url', image_url: { url: image } },
-            ] },
-          ],
-        }),
+      const orBody = JSON.stringify({
+        model: model || 'google/gemini-2.5-flash',
+        messages: [
+          { role: 'user', content: [
+            { type: 'text', text: visionPrompt },
+            { type: 'image_url', image_url: { url: image } },
+          ] },
+        ],
       });
-      const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: data?.error?.message ?? 'openrouter error' });
-      const msg = data.choices?.[0]?.message ?? {};
-      // some models put output in `reasoning` or return empty content with a finish_reason
-      const text = msg.content ?? msg.reasoning ?? '';
-      if (typeof text === 'string' && text.trim() === '') {
-        return res.status(502).json({
-          error: 'empty completion from openrouter',
-          finish_reason: data.choices?.[0]?.finish_reason ?? null,
-          raw_keys: Object.keys(data),
-          usage: data.usage ?? null,
+      // OpenRouter sometimes returns HTTP 200 with an error object inside
+      // (e.g. {"error":{"code":504,"message":"The operation was aborted"}})
+      // when the upstream vision provider times out or is overloaded.
+      // Retry those transient failures instead of surfacing them.
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const r = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: orBody,
         });
+        const data = await r.json();
+        if (!r.ok) return res.status(r.status).json({ error: data?.error?.message ?? 'openrouter error' });
+        if (data?.error) {
+          const code = Number(data.error.code ?? 0);
+          const transient = code === 408 || code === 429 || code === 502 || code === 503 || code === 504 ||
+            /abort|timeout|timed out|overloaded|rate limit/i.test(String(data.error.message ?? ''));
+          if (!transient || attempt === MAX_ATTEMPTS) {
+            return res.status(502).json({
+              error: `openrouter error: ${data.error.message ?? 'unknown'}`,
+              code: data.error.code ?? null,
+              attempts: attempt,
+            });
+          }
+          continue;
+        }
+        const msg = data.choices?.[0]?.message ?? {};
+        // some models put output in `reasoning` or return empty content with a finish_reason
+        const text = msg.content ?? msg.reasoning ?? '';
+        if (typeof text === 'string' && text.trim() === '') {
+          return res.status(502).json({
+            error: 'empty completion from openrouter',
+            finish_reason: data.choices?.[0]?.finish_reason ?? null,
+            raw_keys: Object.keys(data),
+            usage: data.usage ?? null,
+          });
+        }
+        return res.json({ text });
       }
-      return res.json({ text });
     } catch (e) {
       return res.status(502).json({ error: String(e) });
     }
