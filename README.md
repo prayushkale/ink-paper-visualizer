@@ -5,6 +5,10 @@ TypeScript/Vite client renders a Three.js scene; a small Express proxy keeps
 API keys server-side and forwards vision (OpenRouter) and video (fal.ai queue)
 requests.
 
+## Demo
+
+[Watch the demo video](https://github.com/prayushkale/ink-paper-visualizer/releases/download/demo/ink-blot-demo.mp4)
+
 ## Setup
 
 ```bash
