@@ -40,7 +40,18 @@ export function createServer({ fetchImpl = fetch, env = process.env } = {}) {
       });
       const data = await r.json();
       if (!r.ok) return res.status(r.status).json({ error: data?.error?.message ?? 'openrouter error' });
-      return res.json({ text: data.choices?.[0]?.message?.content ?? '' });
+      const msg = data.choices?.[0]?.message ?? {};
+      // some models put output in `reasoning` or return empty content with a finish_reason
+      const text = msg.content ?? msg.reasoning ?? '';
+      if (typeof text === 'string' && text.trim() === '') {
+        return res.status(502).json({
+          error: 'empty completion from openrouter',
+          finish_reason: data.choices?.[0]?.finish_reason ?? null,
+          raw_keys: Object.keys(data),
+          usage: data.usage ?? null,
+        });
+      }
+      return res.json({ text });
     } catch (e) {
       return res.status(502).json({ error: String(e) });
     }
