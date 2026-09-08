@@ -41,7 +41,7 @@ export interface Settings {
 export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.`;
 
 export const DEFAULT_SETTINGS: Settings = {
-  openrouterModel: 'google/gemini-2.5-flash',
+  openrouterModel: 'z-ai/glm-5.3-flash', // verified working 2026-09-08; Google/OpenAI models blocked by workspace guardrails
   visionPrompt: DEFAULT_VISION_PROMPT,
   video: {
     falModel: 'minimax/h3-max-turbo/image-to-video',
