@@ -7,7 +7,7 @@ requests.
 
 ## Demo
 
-https://github.com/prayushkale/ink-paper-visualizer/releases/download/__tmp_video_upload__/ink-blot-test-edited.mp4
+<video src="https://github.com/prayushkale/ink-paper-visualizer/releases/download/__tmp_video_upload__/ink-blot-test-edited.mp4" controls muted width="100%"></video>
 
 ## Setup
 
