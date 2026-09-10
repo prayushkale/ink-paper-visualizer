@@ -66,6 +66,15 @@ describe('composeWorldPrompt', () => {
     expect(world).toContain(music.brief);
   });
 
+  it('lets a caller supply a mood-aware score brief', () => {
+    const custom = composeWorldPrompt({
+      mood, music, palette, moodStrength: 0.7, musicPinned: false,
+      scoreBrief: 'Trance at about 138 BPM, driving and forward-leaning.',
+    });
+    expect(custom).toMatch(/driving and forward-leaning/);
+    expect(custom).not.toContain(music.brief);
+  });
+
   it('tightens as the mood strength rises', () => {
     const loose = composeWorldPrompt({ mood, music, palette, moodStrength: 0.1, musicPinned: false });
     const tight = composeWorldPrompt({ mood, music, palette, moodStrength: 0.9, musicPinned: false });

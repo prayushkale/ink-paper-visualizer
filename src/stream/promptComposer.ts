@@ -16,6 +16,8 @@ export interface WorldPromptInput {
   moodStrength: number;
   /** true when the track is pinned as conditioning audio, not just described. */
   musicPinned: boolean;
+  /** Overrides the score sentence, e.g. from `generatedScoreBrief`. */
+  scoreBrief?: string;
   openingAction?: string;
 }
 
@@ -27,9 +29,10 @@ export interface WorldPromptInput {
  */
 export function composeWorldPrompt(input: WorldPromptInput): string {
   const { mood, music, palette, moodStrength } = input;
+  const brief = input.scoreBrief ?? music.brief;
   const sound = input.musicPinned
-    ? `A continuous ${music.label.toLowerCase()} score is pinned to this film as its soundtrack: ${music.brief}. Every segment is conditioned on the next window of that recording, so cut picture to it rather than inventing music. No voice-over, no dialogue.`
-    : `Score and sound are generated with the picture: ${music.brief}. No voice-over.`;
+    ? `A continuous ${music.label.toLowerCase()} score is pinned to this film as its soundtrack: ${brief}. Every segment is conditioned on the next window of that recording, so cut picture to it rather than inventing music. No voice-over, no dialogue.`
+    : `Score and sound are generated with the picture: ${brief}. No voice-over.`;
   const pressure = moodStrength >= 0.75
     ? 'Hold this mood tightly; let it colour every frame.'
     : moodStrength >= 0.4
