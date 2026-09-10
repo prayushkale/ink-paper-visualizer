@@ -482,3 +482,86 @@ describe('InkStudio', () => {
     expect(h.studio.view.capabilities.ffmpeg).toBe(false);
   });
 });
+
+describe('InkStudio over a long run', () => {
+  it('never reuses a prompt version across a whole chain', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 40, dailyCapUsd: 200, sessionCapSeconds: 120, dryRun: false } } });
+    await goLive(h);
+    for (let i = 0; i < 60; i++) {
+      h.transport.server(chunk({ chunk_index: i, prompt_version: 2 + i }));
+      // a real stream ends and reopens; drive one handover in the middle
+      if (i === 20) {
+        h.transport.server({ type: 'stream_exhausted', reason: 'session_limit', chunks: 21 });
+        await flush();
+        h.transport.state('live');
+      }
+    }
+    const versions = h.transport.sent
+      .filter((message) => message.type === 'prompt' || message.type === 'configure')
+      .map((message) => Number(message.prompt_version));
+    expect(versions.length).toBeGreaterThan(5);
+    expect(new Set(versions).size).toBe(versions.length);
+    for (let i = 1; i < versions.length; i++) {
+      expect(versions[i]!, `version ${versions[i]} after ${versions[i - 1]}`).toBeGreaterThan(versions[i - 1]!);
+    }
+  });
+
+  it('stops itself at the cap instead of running forever', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 1, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
+    await goLive(h);
+    // $1.00 at $0.02/s is 50s of Director, so ~5 chunks
+    for (let i = 0; i < 100 && h.studio.status === 'live'; i++) {
+      h.transport.server(chunk({ chunk_index: i, prompt_version: 1 }));
+      await flush();
+    }
+    expect(h.studio.status).toBe('ended');
+    expect(h.studio.view.spend.sessionUsd).toBeGreaterThanOrEqual(1);
+    expect(h.studio.view.spend.sessionUsd).toBeLessThan(1.6);
+  });
+
+  it('answers nearly every chunk while the rail is being kept full', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
+    await goLive(h);
+    const chunks = 40;
+    for (let i = 0; i < chunks; i++) {
+      h.transport.server(chunk({ chunk_index: i, prompt_version: 2 + i }));
+      // the heartbeat is what refills the rail in production, so drive it here
+      h.timer.beat();
+      await flush();
+      h.timer.beat();
+      await flush();
+    }
+    const prompts = h.transport.sent.filter((message) => message.type === 'prompt');
+    expect(prompts.length).toBeGreaterThanOrEqual(chunks - 4);
+    expect(h.studio.status).toBe('live');
+  });
+
+  it('keeps the film alive on a bare rail by sending continuations, not silence', async () => {
+    // no heartbeat at all, so the rail never refills and stays empty after the
+    // blots prepared during pre-flight have been consumed
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
+    await goLive(h);
+    const chunks = 30;
+    for (let i = 0; i < chunks; i++) h.transport.server(chunk({ chunk_index: i, prompt_version: 2 + i }));
+    const prompts = h.transport.sent.filter((message) => message.type === 'prompt');
+    // a direction arrives at least every few chunks, and never zero of them
+    expect(prompts.length).toBeGreaterThan(chunks / 5);
+    expect(h.studio.status).toBe('live');
+    // the rail genuinely ran out, which is exactly the condition being survived
+    expect(h.studio.view.log.map((line) => line.text).join(' ')).toMatch(/rail ran dry|Continue/);
+  });
+
+  it('chains rather than dying when the server keeps ending sessions', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 120, dryRun: false } } });
+    await goLive(h);
+    for (let round = 0; round < 4; round++) {
+      h.transport.server(chunk({ chunk_index: round, prompt_version: 2 + round }));
+      h.transport.server({ type: 'stream_exhausted', reason: 'session_limit', chunks: round + 1 });
+      await flush();
+      h.transport.state('live');
+    }
+    expect(h.studio.status).toBe('live');
+    expect(h.studio.view.chain.chains).toBe(4);
+    expect(h.transport.sent.filter((message) => message.type === 'configure')).toHaveLength(5);
+  });
+});
