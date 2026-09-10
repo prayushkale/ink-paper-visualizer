@@ -66,12 +66,8 @@ export function renderHud(root: HTMLElement, view: StudioView): void {
     ${view.session.buffering ? '<div class="hud-warn">the model fell behind playback and is catching up</div>' : ''}`;
 }
 
-export interface HudActions {
-  downloadRecording(): void;
-}
-
 /** Cost meters, chain state, recording, and the raw server log. */
-export function renderTelemetry(root: HTMLElement, view: StudioView, actions: HudActions): void {
+export function renderTelemetry(root: HTMLElement, view: StudioView): void {
   const recording = view.recording;
   const remainingSeconds = view.spend.remainingSessionSeconds;
   const result = recording.result;
@@ -113,7 +109,7 @@ export function renderTelemetry(root: HTMLElement, view: StudioView, actions: Hu
         <span class="muted">${formatDuration(recording.durationMs)}</span>
       </div>
       ${result
-        ? `<button class="primary" data-action="download" ${actions ? '' : 'disabled'}>
+        ? `<button class="primary" data-action="download">
              Download ${result.remuxed ? 'mp4' : result.container}
              <span class="muted">· ${Math.round(result.bytes / 1024)} KB</span>
            </button>

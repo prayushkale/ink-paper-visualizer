@@ -322,6 +322,15 @@ select:disabled, input:disabled { opacity: 0.55; }
   background: #2a1b1c; border: 1px solid #55292a; color: #f0b3a8; font-size: 12px;
 }
 
+/* ---------------------------------------------------------------- watch */
+
+#app[data-watch="1"] .panel-rail,
+#app[data-watch="1"] .panel-controls,
+#app[data-watch="1"] .panel-filmstrip { display: none; }
+#app[data-watch="1"] main { grid-template-columns: 1fr; }
+#app[data-watch="1"] #film video { height: 100dvh; }
+#app[data-watch="1"] #stage { min-height: 0; }
+
 /* ---------------------------------------------------------------- narrow */
 
 @media (max-width: 1080px) {

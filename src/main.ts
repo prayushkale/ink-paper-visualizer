@@ -9,34 +9,56 @@ import { MOODS, type MoodId } from './presets/moods';
 import type { MusicId } from './presets/music';
 import { INK_PALETTES } from './ink/recipe';
 import { parseSeed } from './ink/rng';
-import { Paper } from './ink/paper';
-import { InkScene } from './three/scene';
-import { wirePainting } from './three/interact';
 import { api, type HealthResponse } from './api/client';
 import { readShareFromHash } from './share/recipe';
 import { InkStudio } from './studio/studio';
 import { createRuntimePorts } from './studio/ports';
 import { StudioShell, type ShellElements } from './ui/shell';
 import { mountManual } from './ui/manual';
+import type { Paper } from './ink/paper';
+import type { InkScene } from './three/scene';
 
 const settings: Settings = loadSettings();
 let health: HealthResponse | null = null;
 let mode: 'studio' | 'manual' = 'studio';
 
-// --------------------------------------------------------------- the paper
-
-const paperHost = document.getElementById('paper')!;
-const paper = new Paper(canvasForAspect(settings.stream.aspectRatio));
-const scene = new InkScene(paper, paperHost);
 const dropOptions: DropOptions = {
   radius: 40,
   color: settings.ink.palette[0] ?? '#141821',
   wetness: 0.5,
 };
-wirePainting(scene, paper, () => dropOptions);
+
+// ------------------------------------------------------------- lazy paper
+
+/**
+ * three.js is only needed for the hand-painted editor, so it is loaded on
+ * demand: the studio opens on the film, not on a 600 KB 3D engine.
+ */
+let paper: Paper | null = null;
+let scene: InkScene | null = null;
+let loadingPaper: Promise<void> | null = null;
+
+async function ensurePaper(): Promise<void> {
+  if (paper && scene) return;
+  if (loadingPaper) return loadingPaper;
+  loadingPaper = (async () => {
+    const [{ InkScene: Scene }, { Paper: PaperClass }, { wirePainting }] = await Promise.all([
+      import('./three/scene'),
+      import('./ink/paper'),
+      import('./three/interact'),
+    ]);
+    const host = document.getElementById('paper')!;
+    const created = new PaperClass(canvasForAspect(settings.stream.aspectRatio));
+    const view = new Scene(created, host);
+    wirePainting(view, created, () => dropOptions);
+    paper = created;
+    scene = view;
+  })();
+  return loadingPaper;
+}
 
 function renderLoop(): void {
-  if (mode === 'manual') scene.render();
+  if (mode === 'manual' && scene) scene.render();
   requestAnimationFrame(renderLoop);
 }
 renderLoop();
@@ -54,6 +76,9 @@ const studio = new InkStudio({
 });
 
 studio.setVideoElement(player);
+// the stream carries native audio, and by the time anything arrives the user
+// has already pressed Start, so playback is permitted: do not start muted
+player.muted = false;
 player.volume = settings.music.volume;
 
 const elements: ShellElements = {
@@ -68,29 +93,43 @@ const elements: ShellElements = {
   preflight: document.getElementById('notes')!,
 };
 
-const manual = mountManual({
-  container: elements.controlBody,
-  getPaper: () => paper,
-  getScene: () => scene,
-  settings,
-  dropOptions,
-  save: () => saveSettings(settings),
-  onHandoff: (blob, thumbDataUri, recipe) => {
-    studio.enqueueHandmade(recipe, blob, thumbDataUri);
-    setMode('studio');
-  },
-  onExit: () => setMode('studio'),
-});
+let manual: ReturnType<typeof mountManual> | null = null;
 
 function setMode(next: 'studio' | 'manual'): void {
   mode = next;
+  const app = elements.app;
   if (next === 'manual') {
-    document.getElementById('app')!.dataset.mode = 'manual';
-    scene.resize(paperHost);
-    manual.rerender();
+    app.dataset.mode = 'manual';
+    void ensurePaper().then(() => {
+      const host = document.getElementById('paper')!;
+      scene?.resize(host);
+      if (!manual) {
+        manual = mountManual({
+          container: elements.controlBody,
+          getPaper: () => {
+            if (!paper) throw new Error('the paper is still loading');
+            return paper;
+          },
+          getScene: () => {
+            if (!scene) throw new Error('the paper is still loading');
+            return scene;
+          },
+          settings,
+          dropOptions,
+          save: () => saveSettings(settings),
+          onHandoff: (blob, thumbDataUri, recipe) => {
+            studio.enqueueHandmade(recipe, blob, thumbDataUri);
+            setMode('studio');
+          },
+          onExit: () => setMode('studio'),
+        });
+      } else {
+        manual.rerender();
+      }
+    });
     return;
   }
-  document.getElementById('app')!.dataset.mode = 'studio';
+  app.dataset.mode = 'studio';
   shell.refresh();
 }
 
@@ -138,6 +177,11 @@ const shell: StudioShell = new StudioShell(
   () => health,
 );
 
+void player.addEventListener('volumechange', () => {
+  settings.music.volume = player.volume;
+  saveSettings(settings);
+});
+
 // ------------------------------------------------------------------- boot
 
 void api
@@ -151,7 +195,9 @@ void api
   .finally(() => {
     const shared = readShareFromHash(window.location.hash, settings.ink);
     if (shared) studio.applyShare(shared);
-    document.getElementById('app')!.dataset.mode = 'studio';
+    elements.app.dataset.mode = 'studio';
+    // #watch=1 drops the configuration so the film can sit on a screen
+    shell.setWatch(/[#&?]watch(=1)?\b/.test(window.location.hash + window.location.search));
     shell.refresh();
     const missing: string[] = [];
     if (!health) missing.push('the local server is not reachable (start it with npm run dev)');

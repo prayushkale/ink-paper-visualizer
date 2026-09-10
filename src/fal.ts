@@ -31,7 +31,11 @@ const injectToken: RequestMiddleware = async (request) => {
 export const fal: FalClient = createFalClient({
   proxyUrl: FAL_PROXY_URL,
   requestMiddleware: injectToken,
-  // the browser has no credentials of its own; silence the env-key warning path
+  // The browser has no credentials of its own, and must never look for one:
+  // an explicit resolver that always returns nothing keeps the client's
+  // process.env lookup path out of the bundle entirely. The proxy attaches
+  // FAL_KEY on the server side.
+  credentials: () => undefined,
   suppressLocalCredentialsWarning: true,
 });
 

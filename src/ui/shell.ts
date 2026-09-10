@@ -2,6 +2,7 @@ import { DEFAULT_STUDIO_PROMPT, type Settings } from '../state';
 import type { HealthResponse } from '../api/client';
 import { downloadBlob } from '../api/client';
 import { shareUrl } from '../share/recipe';
+import { renderPoster } from './poster';
 import type { InkStudio, StudioView } from '../studio/studio';
 import { renderControls, type ControlActions } from './controls';
 import { renderHud, renderStatusPill, renderTelemetry } from './hud';
@@ -63,6 +64,8 @@ const CAMERA_MOVE_SET = new Set([
  */
 export class StudioShell {
   private lastControlsKey = '';
+  /** Top-bar actions are cheap; this only avoids pointless churn. */
+  private lastTopKey = '';
   private draggingSlider = false;
 
   constructor(
@@ -121,6 +124,9 @@ export class StudioShell {
       case 'resume-recording': this.actions.resumeRecording(); break;
       case 'download': this.download(); break;
       case 'share': void this.copyShare(); break;
+      case 'poster': void this.downloadPoster(); break;
+      case 'show-controls': this.setWatch(false); break;
+      case 'mute': this.toggleSound(); break;
       case 'manual': this.actions.enterManual(); break;
       case 'mood': if (value) this.actions.setMood(value as never); break;
       case 'music': if (value) this.actions.setMusic(value as never); break;
@@ -196,6 +202,35 @@ export class StudioShell {
     downloadBlob(result.blob, `ink-film-${this.getSettings().ink.seed}.${extension}`);
   }
 
+  private async downloadPoster(): Promise<void> {
+    try {
+      const blob = await renderPoster(this.studio.view, this.getSettings());
+      downloadBlob(blob, `ink-film-poster-${this.getSettings().ink.seed}.png`);
+    } catch (error) {
+      this.toast(error instanceof Error ? error.message : 'the poster failed');
+    }
+  }
+
+  /** Spectator mode: no configuration, just the film on a screen. */
+  setWatch(watch: boolean): void {
+    this.elements.app.dataset.watch = watch ? '1' : '0';
+    this.lastControlsKey = '';
+    this.render(this.studio.view);
+  }
+
+  get watchOnly(): boolean {
+    return this.elements.app.dataset.watch === '1';
+  }
+
+  /** The film has sound; this is the escape hatch, not the default. */
+  private toggleSound(): void {
+    const player = this.elements.app.querySelector('video');
+    if (!player) return;
+    player.muted = !player.muted;
+    this.lastTopKey = '';
+    this.render(this.studio.view);
+  }
+
   private async copyShare(): Promise<void> {
     const url = shareUrl(this.studio.sharePayload());
     try {
@@ -235,7 +270,7 @@ export class StudioShell {
     renderRail(this.elements.rail, view);
     renderRail(this.elements.filmstrip, view, { compact: true });
     renderHud(this.elements.hud, view);
-    renderTelemetry(this.elements.telemetry, view, { downloadRecording: () => this.download() });
+    renderTelemetry(this.elements.telemetry, view);
     this.renderControlsIfNeeded(view, settings);
     this.renderPreflight(view, health);
   }
@@ -246,6 +281,13 @@ export class StudioShell {
    * drags, and any open section.
    */
   private renderControlsIfNeeded(view: StudioView, settings: Settings): void {
+    // spectator mode hides the controls entirely, so there is nothing to build
+    if (this.watchOnly) {
+      this.elements.controlBody.innerHTML = '';
+      this.elements.telemetry.innerHTML = '';
+      this.lastControlsKey = '';
+      return;
+    }
     const key = controlsKey(view, settings);
     if (key === this.lastControlsKey) return;
     if (this.draggingSlider) return;
@@ -262,6 +304,10 @@ export class StudioShell {
   private renderTopActions(busy: boolean, view: StudioView): void {
     const slot = this.elements.topbar.querySelector('[data-slot="actions"]');
     if (!slot) return;
+    const player = this.elements.app.querySelector('video');
+    const sound = player && !player.muted
+      ? '<button class="ghost" data-action="mute" title="Mute the film">Sound on</button>'
+      : '<button class="ghost" data-action="mute" title="Unmute the film">Muted</button>';
     const estimate = estimateRun({
       seconds: this.getSettings().budget.sessionCapSeconds,
       sessionCapSeconds: this.getSettings().budget.sessionCapSeconds,
@@ -269,15 +315,26 @@ export class StudioShell {
       angleSeconds: this.getSettings().camera.duration,
       angleResolution: this.getSettings().camera.resolution,
     });
+    if (this.watchOnly) {
+      slot.innerHTML = busy
+        ? `${sound}<button class="danger" data-action="stop">Stop the film</button>`
+        : `<button class="primary" data-action="start">Start the film</button>
+           ${sound}
+           <button class="ghost" data-action="show-controls">Show everything</button>`;
+      return;
+    }
     slot.innerHTML = busy
       ? `${view.recording.state === 'paused'
           ? '<button class="secondary" data-action="resume-recording">Resume recording</button>'
           : '<button class="secondary" data-action="pause-recording">Pause recording</button>'}
+         ${sound}
          <button class="danger" data-action="stop">Stop the film</button>`
       : `<button class="primary" data-action="start" ${view.status === 'preflight' ? 'disabled' : ''}>
            Start the film <span class="muted">≈${usd(estimate.totalUsd)} up to ${minutesLabel(this.getSettings().budget.sessionCapSeconds)}</span>
          </button>
          <button class="secondary" data-action="share">Copy share link</button>
+         <button class="secondary" data-action="poster" ${view.rail.length > 0 ? '' : 'disabled'}>Poster</button>
+         ${sound}
          <button class="ghost" data-action="manual">Paint one myself</button>`;
   }
 
