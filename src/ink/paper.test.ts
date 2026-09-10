@@ -1,37 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { foldHalves, clampDropRadius } from './paper';
-
-describe('foldHalves', () => {
-  it('vertical fold-left: source = left half, target = right half', () => {
-    const h = foldHalves({ axis: 'vertical', direction: 'left' });
-    expect(h.sourceX).toBe(0);
-    expect(h.targetX).toBe(0.5);
-    expect(h.sourceY).toBe(0);
-    expect(h.targetY).toBe(0);
-  });
-  it('vertical fold-right: source = right half, target = left', () => {
-    const h = foldHalves({ axis: 'vertical', direction: 'right' });
-    expect(h.sourceX).toBe(0.5);
-    expect(h.targetX).toBe(0);
-  });
-  it('horizontal fold-top: source = top half, target = bottom', () => {
-    const h = foldHalves({ axis: 'horizontal', direction: 'top' });
-    expect(h.sourceY).toBe(0);
-    expect(h.targetY).toBe(0.5);
-    expect(h.sourceX).toBe(0);
-    expect(h.targetX).toBe(0);
-  });
-  it('horizontal fold-bottom: source = bottom half, target = top', () => {
-    const h = foldHalves({ axis: 'horizontal', direction: 'bottom' });
-    expect(h.sourceY).toBe(0.5);
-    expect(h.targetY).toBe(0);
-  });
-});
+import { CANVAS_SIZE, PAPER_COLOR, clampDropRadius, uvToPixels } from './paper';
+import { canvasForAspect } from './types';
 
 describe('clampDropRadius', () => {
   it('clamps to [10, 120]', () => {
     expect(clampDropRadius(5)).toBe(10);
     expect(clampDropRadius(999)).toBe(120);
     expect(clampDropRadius(50)).toBe(50);
+  });
+});
+
+describe('uvToPixels', () => {
+  it('scales a UV width against the short edge', () => {
+    const landscape = canvasForAspect('16:9', CANVAS_SIZE);
+    expect(uvToPixels(0.5, landscape)).toBeCloseTo(0.5 * landscape.height);
+    const square = canvasForAspect('1:1', CANVAS_SIZE);
+    expect(uvToPixels(0.25, square)).toBeCloseTo(0.25 * CANVAS_SIZE);
+  });
+});
+
+describe('paper constants', () => {
+  it('keeps the legacy 1024 canvas default and a warm paper tone', () => {
+    expect(CANVAS_SIZE).toBe(1024);
+    expect(PAPER_COLOR).toBe('#f4efe6');
   });
 });

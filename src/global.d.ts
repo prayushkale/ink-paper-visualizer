@@ -1,4 +1,8 @@
 export {};
+
 declare global {
-  interface Window { lastInterpretation?: string; lastVideoUrl?: string; }
+  interface Window {
+    lastInterpretation?: string;
+    lastError?: string;
+  }
 }
