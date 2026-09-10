@@ -29,8 +29,6 @@ export interface MoodPreset {
   tools: InkToolId[];
 }
 
-const ALL_TOOLS: InkToolId[] = ['drop', 'splatter', 'streak', 'curve', 'pool', 'drag', 'spray', 'backrun'];
-
 export const MOODS: Record<MoodId, MoodPreset> = {
   serene: {
     id: 'serene',
@@ -140,5 +138,3 @@ export const DEFAULT_MOOD_ID: MoodId = 'dreamlike';
 export function moodById(id: string | undefined): MoodPreset {
   return (id && MOODS[id as MoodId]) || MOODS[DEFAULT_MOOD_ID];
 }
-
-export const ALL_INK_TOOLS = ALL_TOOLS;

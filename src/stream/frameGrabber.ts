@@ -1,5 +1,3 @@
-import { proxiedVideoUrl } from '../api/client';
-
 export interface GrabbedFrame {
   blob: Blob;
   /** Wall-clock ms when the frame was taken. */
@@ -117,15 +115,4 @@ export function createFrameGrabber(options: FrameGrabberOptions): FrameGrabberPo
       frame = null;
     },
   };
-}
-
-/** Reads a fal-hosted still into a blob so it can be re-hosted for a handover. */
-export async function fetchStillAsBlob(url: string): Promise<Blob | null> {
-  try {
-    const response = await fetch(proxiedVideoUrl(url));
-    if (!response.ok) return null;
-    return await response.blob();
-  } catch {
-    return null;
-  }
 }

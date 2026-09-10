@@ -20,7 +20,8 @@ export function getProxyToken(): string | null {
   return proxyToken;
 }
 
-const injectToken: RequestMiddleware = async (request) => {
+/** Exported so the token header can be asserted without a network call. */
+export const falRequestMiddleware: RequestMiddleware = async (request) => {
   if (!proxyToken) return request;
   return {
     ...request,
@@ -30,7 +31,7 @@ const injectToken: RequestMiddleware = async (request) => {
 
 export const fal: FalClient = createFalClient({
   proxyUrl: FAL_PROXY_URL,
-  requestMiddleware: injectToken,
+  requestMiddleware: falRequestMiddleware,
   // The browser has no credentials of its own, and must never look for one:
   // an explicit resolver that always returns nothing keeps the client's
   // process.env lookup path out of the bundle entirely. The proxy attaches

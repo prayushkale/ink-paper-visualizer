@@ -375,17 +375,6 @@ function cleanup(paths) {
   }
 }
 
-/** Small helper reused by the server tests. */
-export function jsonRes(body, status = 200) {
-  return {
-    ok: status < 300,
-    status,
-    headers: { get: () => null },
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-  };
-}
-
 const isEntrypoint = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (isEntrypoint) {
   const port = Number(process.env.PORT ?? 8787);

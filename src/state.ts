@@ -94,6 +94,11 @@ export interface Settings {
   ink: InkRecipe;
   /** Keep the hand-painted route available next to the automatic one. */
   manualModeEnabled: boolean;
+  /**
+   * Mirrors the server's PROXY_AUTH_TOKEN, when one is set. Runtime-only: it is
+   * deliberately absent from share payloads.
+   */
+  proxyToken: string;
 }
 
 // ------------------------------------------------------------- pricing
@@ -265,6 +270,7 @@ export function defaultSettings(): Settings {
     budget: { ...DEFAULT_BUDGET },
     ink: defaultInkRecipe(),
     manualModeEnabled: true,
+    proxyToken: '',
   };
 }
 

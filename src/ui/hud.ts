@@ -1,4 +1,4 @@
-import { directorRate, isPromo, usd, type Settings } from '../state';
+import { usd } from '../state';
 import { formatDuration } from '../api/client';
 import type { StudioView } from '../studio/studio';
 
@@ -128,20 +128,4 @@ function sessionPercent(view: StudioView): number {
   const cap = view.spend.remainingSessionSeconds + view.session.generatedSeconds;
   if (cap <= 0) return 0;
   return Math.max(0, Math.min(100, (view.session.generatedSeconds / cap) * 100));
-}
-
-/** A one-line pre-flight summary used before the money starts. */
-export function describePreflight(settings: Settings, estimate: { totalUsd: number; sessions: number; beats: number; blots: number; angleTakes: number }): string {
-  const promo = isPromo();
-  return [
-    `${Math.round(settings.budget.sessionCapSeconds)}s cap`,
-    `up to ${sessionsText(estimate.sessions)}`,
-    `≈${estimate.beats} destinations, ${estimate.blots} blot${estimate.blots === 1 ? '' : 's'}${estimate.angleTakes ? `, ${estimate.angleTakes} orbit takes` : ''}`,
-    `≈${usd(estimate.totalUsd)}${promo ? ' at the launch rate' : ''}`,
-    `Director $${directorRate().toFixed(2)}/s, 60s minimum billed per session`,
-  ].join(' · ');
-}
-
-function sessionsText(sessions: number): string {
-  return sessions === 1 ? '1 session' : `${sessions} chained sessions`;
 }

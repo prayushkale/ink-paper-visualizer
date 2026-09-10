@@ -22,6 +22,7 @@ function controlsKey(view: StudioView, settings: Settings): string {
 }
 
 export interface ShellActions extends ControlActions {
+  setProxyToken(token: string): void;
   start(): void;
   stop(): void;
   pauseRecording(): void;
@@ -157,6 +158,7 @@ export class StudioShell {
       case 'ink.seed': this.actions.setSeed(String(value)); break;
       case 'music.customUrl': this.actions.setMusicUrl(String(value)); break;
       case 'openrouterModel': this.actions.setVisionModel(String(value)); break;
+      case 'proxyToken': this.actions.setProxyToken(String(value)); break;
       case 'studioPrompt': this.actions.setStudioPrompt(String(value)); break;
       default: break;
     }

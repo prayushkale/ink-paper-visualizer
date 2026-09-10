@@ -34,6 +34,7 @@ export interface ControlActions {
   setBudget(patch: Partial<Settings['budget']>): void;
   setStudioPrompt(prompt: string): void;
   setVisionModel(model: string): void;
+  setProxyToken(token: string): void;
   setResolution(resolution: Settings['stream']['resolution']): void;
   releaseCurrent(): void;
   paintThisOne(): void;
@@ -91,6 +92,7 @@ export function renderControls(
         </label>
         <p class="muted small">A session is not resumable, so a long film is a chain. The next one opens on the last frame, or on another angle of the same blot.</p>
 
+        <label>Proxy token <input type="text" data-input="proxyToken" value="${esc(settings.proxyToken)}" placeholder="only if the server sets PROXY_AUTH_TOKEN" /></label>
         <label>Seed <input type="text" value="${settings.ink.seed}" data-input="ink.seed" placeholder="any number or word" /></label>
         <div class="row">
           <button class="secondary" data-action="reroll">New seed</button>

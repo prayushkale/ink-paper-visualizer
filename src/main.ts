@@ -13,12 +13,15 @@ import { api, type HealthResponse } from './api/client';
 import { readShareFromHash } from './share/recipe';
 import { InkStudio } from './studio/studio';
 import { createRuntimePorts } from './studio/ports';
+import { setProxyToken } from './fal';
 import { StudioShell, type ShellElements } from './ui/shell';
 import { mountManual } from './ui/manual';
 import type { Paper } from './ink/paper';
 import type { InkScene } from './three/scene';
 
 const settings: Settings = loadSettings();
+// the proxy only requires this when the server sets PROXY_AUTH_TOKEN
+setProxyToken(settings.proxyToken || null);
 let health: HealthResponse | null = null;
 let mode: 'studio' | 'manual' = 'studio';
 
@@ -169,6 +172,10 @@ const shell: StudioShell = new StudioShell(
     setBudget: (patch) => studio.updateSettings({ budget: { ...settings.budget, ...patch } }),
     setStudioPrompt: (prompt) => studio.updateSettings({ studioPrompt: prompt }),
     setVisionModel: (model) => studio.updateSettings({ openrouterModel: model }),
+    setProxyToken: (token) => {
+      setProxyToken(token || null);
+      studio.updateSettings({ proxyToken: token });
+    },
     setResolution: (resolution) => studio.updateSettings({ stream: { ...settings.stream, resolution } }),
     releaseCurrent: () => studio.releaseCurrent(),
     paintThisOne: () => setMode('manual'),

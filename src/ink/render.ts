@@ -1,5 +1,5 @@
 import { Paper } from './paper';
-import type { CanvasSpec, InkRecipe } from './types';
+import type { InkRecipe } from './types';
 
 export interface RenderedBlot {
   /** Full-size PNG for hosting on fal; this is what the model sees. */
@@ -59,8 +59,4 @@ export function snapshotPaper(paper: Paper, options: RenderBlotOptions = {}): Om
     thumbDataUri: downscale(paper.canvas, options.thumbEdge ?? DEFAULT_THUMB_EDGE, 'image/jpeg', 0.72),
     visionDataUri: downscale(paper.canvas, options.visionEdge ?? DEFAULT_VISION_EDGE, 'image/jpeg', 0.82),
   };
-}
-
-export function canvasSpecKey(spec: CanvasSpec): string {
-  return `${spec.width}x${spec.height}`;
 }
