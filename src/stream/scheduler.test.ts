@@ -310,6 +310,21 @@ describe('BlotScheduler', () => {
     expect(s.sent.length).toBeGreaterThan(1);
   });
 
+  it('reopens the gate on its own when no chunk arrives at all', () => {
+    // onChunk can only notice a lost acknowledgement if a chunk arrives, so a
+    // session that stops generating has to be checked from outside
+    scheduler.tick();
+    expect(scheduler.pending).toBe(1);
+    expect(scheduler.checkDispatchTimeout()).toBe(false);
+    clock += 40_000;
+    expect(scheduler.checkDispatchTimeout()).toBe(true);
+    expect(warnings.some((w) => /dispatch gate/.test(w))).toBe(true);
+    expect(scheduler.pending).toBe(0);
+    // and the film can be sent its next destination immediately
+    scheduler.tick();
+    expect(s.sent.length).toBeGreaterThan(1);
+  });
+
   it('reports each destination as it is dispatched', () => {
     const seen: string[] = [];
     const reporting = new BlotScheduler({

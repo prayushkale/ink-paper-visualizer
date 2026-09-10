@@ -110,7 +110,7 @@ describe('encodeShare / decodeShare', () => {
     expect(decoded.camera.moves.length).toBeGreaterThan(0);
     expect(decoded.stream.memory).toBeLessThanOrEqual(50);
     expect(decoded.stream.arrivalMode).toBe('hard');
-    expect(decoded.sessionCapSeconds).toBeGreaterThanOrEqual(60);
+    expect(decoded.sessionCapSeconds).toBeGreaterThanOrEqual(10);
   });
 
   it('drops moves that no longer exist but keeps the valid ones', () => {

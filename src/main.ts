@@ -1,13 +1,14 @@
 import {
+  applyQualityPreset,
   canvasForAspect,
   loadSettings,
   saveSettings,
   type DropOptions,
   type Settings,
 } from './state';
-import { MOODS, type MoodId } from './presets/moods';
+import type { MoodId } from './presets/moods';
 import type { MusicId } from './presets/music';
-import { INK_PALETTES } from './ink/recipe';
+import { INK_COLOR_RANGE } from './ink/recipe';
 import { parseSeed } from './ink/rng';
 import { api, type HealthResponse } from './api/client';
 import { readShareFromHash } from './share/recipe';
@@ -27,7 +28,8 @@ let mode: 'studio' | 'manual' = 'studio';
 
 const dropOptions: DropOptions = {
   radius: 40,
-  color: settings.ink.palette[0] ?? '#141821',
+  // the manual brush opens on a random pigment; the colour can still be changed
+  color: INK_COLOR_RANGE[Math.floor(Math.random() * INK_COLOR_RANGE.length)] ?? '#141821',
   wetness: 0.5,
 };
 
@@ -90,6 +92,8 @@ const elements: ShellElements = {
   rail: document.getElementById('rail')!,
   filmstrip: document.getElementById('filmstrip')!,
   hud: document.getElementById('hud')!,
+  film: document.getElementById('film')!,
+  preparing: document.getElementById('preparing')!,
   controls: document.getElementById('controls')!,
   controlBody: document.getElementById('control-body')!,
   telemetry: document.getElementById('telemetry')!,
@@ -146,21 +150,13 @@ const shell: StudioShell = new StudioShell(
       });
     },
     stop: () => void studio.stop(),
-    pauseRecording: () => studio.pauseRecording(),
-    resumeRecording: () => studio.resumeRecording(),
+    pauseFilm: () => studio.pauseFilm(),
+    resumeFilm: () => studio.resumeFilm(),
     enterManual: () => setMode('manual'),
 
-    setMood: (id: MoodId) => {
-      studio.updateSettings({
-        moodId: id,
-        ink: { ...settings.ink, palette: [...MOODS[id].palette] },
-      });
-    },
+    setQuality: (id) => studio.updateSettings(applyQualityPreset(settings, id)),
+    setMood: (id: MoodId) => studio.updateSettings({ moodId: id }),
     setMoodStrength: (value) => studio.updateSettings({ moodStrength: value }),
-    setPalette: (id) => {
-      const palette = INK_PALETTES[id];
-      if (palette) studio.updateSettings({ ink: { ...settings.ink, palette: [...palette] } });
-    },
     setSeed: (raw) => studio.updateSettings({ ink: { ...settings.ink, seed: parseSeed(raw) } }),
     reroll: () => studio.updateSettings({ ink: { ...settings.ink, seed: parseSeed(null) } }),
     setMusic: (id: MusicId) => void studio.setMusic({ musicId: id }),
@@ -200,6 +196,8 @@ void api
     health = null;
   })
   .finally(() => {
+    // the studio was built before this resolved, so hand it the answer
+    studio.setHealth(health);
     const shared = readShareFromHash(window.location.hash, settings.ink);
     if (shared) studio.applyShare(shared);
     elements.app.dataset.mode = 'studio';

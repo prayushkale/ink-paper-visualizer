@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_BUDGET,
   DIRECTOR_RATE,
+  QUALITY_PRESETS,
+  applyQualityPreset,
   defaultSettings,
   directorRate,
   estimateRun,
@@ -10,6 +12,7 @@ import {
   minutesLabel,
   multiAngleRate,
   planDestinations,
+  qualityPresetDrifted,
   saveSettings,
   usd,
 } from './state';
@@ -151,13 +154,18 @@ describe('formatting', () => {
 describe('defaultSettings', () => {
   it('builds a complete, sane studio configuration', () => {
     const settings = defaultSettings();
-    expect(settings.version).toBe(2);
+    expect(settings.version).toBe(3);
+    expect(settings.quality).toBe('low');
     expect(settings.stream.falModel).toBe('minimax/h3-max/director');
-    expect(settings.stream.memory).toBe(12);
+    expect(settings.stream.resolution).toBe('480p');
+    expect(settings.stream.memory).toBe(6);
     expect(settings.stream.autoChain).toBe(true);
     expect(MOOD_IDS).toContain(settings.moodId);
     expect(MUSIC_IDS).toContain(settings.music.musicId);
-    expect(settings.music.mode).toBe('pinned');
+    // the bundled music folder ships empty, so the default score has to be the
+    // one that needs no track to be dropped in first
+    expect(settings.music.mode).toBe('generated');
+    expect(settings.camera.enabled).toBe(false);
     expect(settings.camera.moves.every((move) => CAMERA_MOVE_IDS.includes(move))).toBe(true);
     expect(settings.budget).toEqual(DEFAULT_BUDGET);
     expect(settings.ink.blotCount).toBeGreaterThan(0);
@@ -169,8 +177,43 @@ describe('defaultSettings', () => {
     const b = defaultSettings();
     a.stream.memory = 40;
     a.ink.palette.push('#ffffff');
-    expect(b.stream.memory).toBe(12);
+    expect(b.stream.memory).toBe(6);
     expect(b.ink.palette).not.toContain('#ffffff');
+  });
+
+  it('ships low as the cheapest preset', () => {
+    const low = QUALITY_PRESETS.low;
+    const medium = QUALITY_PRESETS.medium;
+    const high = QUALITY_PRESETS.high;
+    expect(low.camera.enabled).toBe(false);
+    expect(low.camera.anglesPerBlot).toBe(0);
+    expect(low.stream.resolution).toBe('480p');
+    expect(low.budget.sessionCapSeconds).toBeLessThan(medium.budget.sessionCapSeconds);
+    expect(medium.budget.sessionCapSeconds).toBeLessThan(high.budget.sessionCapSeconds);
+    expect(low.budget.sessionCapUsd).toBeLessThan(medium.budget.sessionCapUsd);
+    expect(medium.budget.sessionCapUsd).toBeLessThan(high.budget.sessionCapUsd);
+  });
+});
+
+describe('applyQualityPreset', () => {
+  it('writes the stream, camera and budget groups and is pure', () => {
+    const base = defaultSettings();
+    const before = structuredClone(base);
+    const applied = applyQualityPreset(base, 'high');
+    expect(applied).not.toBe(base);
+    expect(base).toEqual(before);
+    expect(applied.quality).toBe('high');
+    expect(applied.stream.resolution).toBe('1080p');
+    expect(applied.camera.enabled).toBe(true);
+    expect(applied.camera.anglesPerBlot).toBe(4);
+    expect(applied.budget.sessionCapSeconds).toBe(600);
+  });
+
+  it('reports drift when a derived value is edited by hand', () => {
+    const applied = applyQualityPreset(defaultSettings(), 'medium');
+    expect(qualityPresetDrifted(applied)).toBe(false);
+    applied.stream.memory = 3;
+    expect(qualityPresetDrifted(applied)).toBe(true);
   });
 });
 
@@ -178,7 +221,7 @@ describe('mergeSettings', () => {
   it('merges nested objects instead of replacing them', () => {
     const merged = mergeSettings(defaultSettings(), { stream: { resolution: '480p' }, moodStrength: 0.2 });
     expect(merged.stream.resolution).toBe('480p');
-    expect(merged.stream.memory).toBe(12);
+    expect(merged.stream.memory).toBe(6);
     expect(merged.moodStrength).toBeCloseTo(0.2);
   });
 
@@ -197,7 +240,7 @@ describe('mergeSettings', () => {
     });
     expect(merged.stream.memory).toBe(50);
     expect(merged.camera.anglesPerBlot).toBe(0);
-    expect(merged.budget.sessionCapSeconds).toBe(60);
+    expect(merged.budget.sessionCapSeconds).toBe(10);
     expect(merged.moodStrength).toBe(1);
     expect(merged.music.volume).toBe(0);
   });
@@ -211,7 +254,7 @@ describe('mergeSettings', () => {
 
   it('does not let a payload escalate the version or drop required fields', () => {
     const merged = mergeSettings(defaultSettings(), { version: 99, ink: null });
-    expect(merged.version).toBe(2);
+    expect(merged.version).toBe(3);
     expect(merged.ink.blotCount).toBeGreaterThan(0);
   });
 });

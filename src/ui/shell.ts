@@ -5,7 +5,7 @@ import { shareUrl } from '../share/recipe';
 import { renderPoster } from './poster';
 import type { InkStudio, StudioView } from '../studio/studio';
 import { renderControls, type ControlActions } from './controls';
-import { renderHud, renderStatusPill, renderTelemetry } from './hud';
+import { renderHud, renderPreparing, renderStatusPill, renderTelemetry } from './hud';
 import { renderRail } from './rail';
 import { estimateRun, minutesLabel, usd } from '../state';
 
@@ -25,8 +25,8 @@ export interface ShellActions extends ControlActions {
   setProxyToken(token: string): void;
   start(): void;
   stop(): void;
-  pauseRecording(): void;
-  resumeRecording(): void;
+  pauseFilm(): void;
+  resumeFilm(): void;
   enterManual(): void;
 }
 
@@ -36,6 +36,10 @@ export interface ShellElements {
   rail: HTMLElement;
   filmstrip: HTMLElement;
   hud: HTMLElement;
+  /** The element that carries the film; double-clicking it goes fullscreen. */
+  film: HTMLElement;
+  /** The pre-flight overlay, drawn over the film while blots are prepared. */
+  preparing: HTMLElement;
   /** The scrolling column; holds telemetry and the control body. */
   controls: HTMLElement;
   /** Where the settings sections render. Replaced on change, not on every tick. */
@@ -68,6 +72,8 @@ export class StudioShell {
   /** Top-bar actions are cheap; this only avoids pointless churn. */
   private lastTopKey = '';
   private draggingSlider = false;
+  /** Highest alert id already shown as a toast. */
+  private lastAlertId = 0;
 
   constructor(
     private readonly elements: ShellElements,
@@ -84,6 +90,8 @@ export class StudioShell {
     });
     elements.telemetry.addEventListener('click', (event) => this.onClick(event));
     elements.topbar.addEventListener('click', (event) => this.onClick(event));
+    // double-click the picture for fullscreen, the way a video player behaves
+    elements.film.addEventListener('dblclick', () => void this.toggleFullscreen());
   }
 
   private onInput(event: Event): void {
@@ -121,15 +129,17 @@ export class StudioShell {
     switch (action) {
       case 'start': void this.startRun(); break;
       case 'stop': void this.actions.stop(); break;
-      case 'pause-recording': this.actions.pauseRecording(); break;
-      case 'resume-recording': this.actions.resumeRecording(); break;
-      case 'download': this.download(); break;
+      case 'pause-film': this.actions.pauseFilm(); break;
+      case 'resume-film': this.actions.resumeFilm(); break;
+      case 'fullscreen': void this.toggleFullscreen(); break;
+      case 'download': this.download(Number(button.dataset.index ?? 0)); break;
       case 'share': void this.copyShare(); break;
       case 'poster': void this.downloadPoster(); break;
       case 'show-controls': this.setWatch(false); break;
       case 'mute': this.toggleSound(); break;
       case 'manual': this.actions.enterManual(); break;
       case 'mood': if (value) this.actions.setMood(value as never); break;
+      case 'quality': if (value) this.actions.setQuality(value as never); break;
       case 'music': if (value) this.actions.setMusic(value as never); break;
       case 'music-mode': if (value) this.actions.setMusicMode(value as 'pinned' | 'generated'); break;
       case 'camera-move': if (value) this.toggleCameraMove(value); break;
@@ -137,9 +147,6 @@ export class StudioShell {
       case 'reroll': this.reroll(); break;
       case 'paint': this.actions.paintThisOne(); break;
       case 'reset-studio-prompt': this.actions.setStudioPrompt(DEFAULT_STUDIO_PROMPT); break;
-      case 'palette':
-        if (value) this.actions.setPalette(value);
-        break;
       default:
         break;
     }
@@ -175,8 +182,29 @@ export class StudioShell {
       case 'camera.resolution': this.actions.setCamera({ resolution: String(value) as '480P' | '768P' | '1080P' }); break;
       case 'camera.handoff': this.actions.setCamera({ handoff: String(value) as 'continue' | 'turn' }); break;
       case 'budget.dryRun': this.actions.setBudget({ dryRun: Boolean(value) }); break;
-      case 'palette': this.actions.setPalette(String(value)); break;
       default: this.applyInput(key, value);
+    }
+  }
+
+  /** Toggles fullscreen on the element that carries the film. */
+  private async toggleFullscreen(): Promise<void> {
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void>;
+    };
+    const host = this.elements.film as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
+    const current = document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+    try {
+      if (current) {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else await doc.webkitExitFullscreen?.();
+      } else if (host.requestFullscreen) {
+        await host.requestFullscreen();
+      } else {
+        await host.webkitRequestFullscreen?.();
+      }
+    } catch {
+      this.toast('this browser refused fullscreen');
     }
   }
 
@@ -197,11 +225,13 @@ export class StudioShell {
     this.actions.start();
   }
 
-  private download(): void {
-    const result = this.studio.view.recording.result;
-    if (!result) return;
-    const extension = result.container === 'mp4' ? 'mp4' : result.container === 'webm' ? 'webm' : 'bin';
-    downloadBlob(result.blob, `ink-film-${this.getSettings().ink.seed}.${extension}`);
+  private download(index = 0): void {
+    const { parts, result } = this.studio.view.recording;
+    const chosen = parts[index] ?? result;
+    if (!chosen) return;
+    const extension = chosen.container === 'mp4' ? 'mp4' : chosen.container === 'webm' ? 'webm' : 'bin';
+    const suffix = parts.length > 1 ? `-part-${index + 1}` : '';
+    downloadBlob(chosen.blob, `ink-film-${this.getSettings().ink.seed}${suffix}.${extension}`);
   }
 
   private async downloadPoster(): Promise<void> {
@@ -243,12 +273,21 @@ export class StudioShell {
     }
   }
 
-  private toast(message: string): void {
+  private toast(message: string, kind: 'info' | 'warn' | 'error' = 'info'): void {
     const node = document.createElement('div');
-    node.className = 'toast';
+    node.className = `toast toast-${kind}`;
     node.textContent = message;
     this.elements.app.appendChild(node);
-    setTimeout(() => node.remove(), 4000);
+    setTimeout(() => node.remove(), kind === 'info' ? 4000 : 7000);
+  }
+
+  /** Shows every alert the studio has queued since the last render. */
+  private renderAlerts(view: StudioView): void {
+    for (const alert of view.alerts) {
+      if (alert.id <= this.lastAlertId) continue;
+      this.lastAlertId = alert.id;
+      this.toast(alert.text, alert.kind);
+    }
   }
 
   /** Re-renders everything, bypassing the change guard. Used on mode switch. */
@@ -272,9 +311,11 @@ export class StudioShell {
     renderRail(this.elements.rail, view);
     renderRail(this.elements.filmstrip, view, { compact: true });
     renderHud(this.elements.hud, view);
+    renderPreparing(this.elements.preparing, view);
     renderTelemetry(this.elements.telemetry, view);
     this.renderControlsIfNeeded(view, settings);
     this.renderPreflight(view, health);
+    this.renderAlerts(view);
   }
 
   /**
@@ -310,6 +351,7 @@ export class StudioShell {
     const sound = player && !player.muted
       ? '<button class="ghost" data-action="mute" title="Mute the film">Sound on</button>'
       : '<button class="ghost" data-action="mute" title="Unmute the film">Muted</button>';
+    const fullscreen = '<button class="ghost" data-action="fullscreen" title="Double-click the film for fullscreen">Fullscreen</button>';
     const estimate = estimateRun({
       seconds: this.getSettings().budget.sessionCapSeconds,
       sessionCapSeconds: this.getSettings().budget.sessionCapSeconds,
@@ -319,16 +361,18 @@ export class StudioShell {
     });
     if (this.watchOnly) {
       slot.innerHTML = busy
-        ? `${sound}<button class="danger" data-action="stop">Stop the film</button>`
+        ? `${view.status === 'paused' ? '<button class="secondary" data-action="resume-film" title="Open a new session and play">Play</button>' : '<button class="secondary" data-action="pause-film" title="Close the session and stop billing">Pause</button>'}
+           ${fullscreen}${sound}<button class="danger" data-action="stop">Stop the film</button>`
         : `<button class="primary" data-action="start">Start the film</button>
            ${sound}
            <button class="ghost" data-action="show-controls">Show everything</button>`;
       return;
     }
     slot.innerHTML = busy
-      ? `${view.recording.state === 'paused'
-          ? '<button class="secondary" data-action="resume-recording">Resume recording</button>'
-          : '<button class="secondary" data-action="pause-recording">Pause recording</button>'}
+      ? `${view.status === 'paused'
+          ? '<button class="secondary" data-action="resume-film" title="Open a new session on the frozen frame and play">Play the film <span class="muted">new session</span></button>'
+          : '<button class="secondary" data-action="pause-film" title="Close the session now so nothing more is billed">Pause the film</button>'}
+         ${fullscreen}
          ${sound}
          <button class="danger" data-action="stop">Stop the film</button>`
       : `<button class="primary" data-action="start" ${view.status === 'preflight' ? 'disabled' : ''}>
@@ -336,6 +380,7 @@ export class StudioShell {
          </button>
          <button class="secondary" data-action="share">Copy share link</button>
          <button class="secondary" data-action="poster" ${view.rail.length > 0 ? '' : 'disabled'}>Poster</button>
+         ${fullscreen}
          ${sound}
          <button class="ghost" data-action="manual">Paint one myself</button>`;
   }
@@ -348,8 +393,11 @@ export class StudioShell {
     if (!view.spend.dryRun && this.getSettings().music.mode === 'pinned' && !view.music.resolvedUrl && view.status === 'idle') {
       messages.push('Pinned score selected. A track resolves when the run starts, or switch to a model-generated score.');
     }
-    if (view.capabilities.sessionMaxSeconds !== null && !view.spend.dryRun) {
+    if (view.capabilities.sessionMaxSeconds !== null && !view.spend.dryRun && this.getSettings().stream.autoChain) {
       messages.push(`This session will be cut off after ${view.capabilities.sessionMaxSeconds}s; the film hands over just before that.`);
+    }
+    if (view.status === 'paused') {
+      messages.push('Paused: the session is closed, so nothing more is being generated or billed. Play opens a new session on the frozen frame, which bills a fresh session minimum.');
     }
     const warnings = [...messages, ...view.warnings.slice(-3)];
     this.elements.preflight.innerHTML = warnings.length === 0

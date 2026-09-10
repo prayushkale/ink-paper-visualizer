@@ -104,6 +104,9 @@ export class StreamRecorder {
   private pausedAt: number | null = null;
   private stopped: Promise<Recording | null> | null = null;
   private error: unknown = null;
+  /** Set when the browser's recorder has stopped, however it got there. */
+  private ended = false;
+  private endWaiters: Array<() => void> = [];
 
   private readonly now: () => number;
 
@@ -135,6 +138,8 @@ export class StreamRecorder {
     this.chosen = chosen;
     this.chunks = [];
     this.error = null;
+    this.ended = false;
+    this.endWaiters = [];
     this.startedAt = this.now();
     this.pausedMs = 0;
     this.pausedAt = null;
@@ -144,9 +149,40 @@ export class StreamRecorder {
     });
     recorder.addEventListener('error', (event) => {
       this.error = event;
+      // an errored recorder will never fire stop; finalise what was captured
+      this.markEnded();
     });
+    // Registered here rather than inside stop(): the browser stops a recorder
+    // itself once every track of its stream has ended, and that is exactly what
+    // happens when the session behind the stream dies. A listener attached only
+    // for the duration of stop() would miss it and wait forever.
+    recorder.addEventListener('stop', () => this.markEnded());
     recorder.start(this.options.timesliceMs ?? 1000);
     return chosen;
+  }
+
+  /** Latches the end of recording and releases anyone waiting on it. */
+  private markEnded(): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.stoppedAt = this.now();
+    const waiters = this.endWaiters;
+    this.endWaiters = [];
+    for (const waiter of waiters) waiter();
+  }
+
+  /** Resolves once the recorder has stopped, or once waiting stops being useful. */
+  private waitForEnd(timeoutMs = 5000): Promise<void> {
+    if (this.ended) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        this.endWaiters = this.endWaiters.filter((waiter) => waiter !== done);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      this.endWaiters.push(done);
+    });
   }
 
   pause(): void {
@@ -189,41 +225,37 @@ export class StreamRecorder {
     const recorder = this.recorder;
     if (!recorder) return null;
     const chosen = this.chosen!;
-    this.stopped = new Promise<Recording | null>((resolve) => {
-      recorder.addEventListener('stop', () => {
-        this.stoppedAt = this.now();
-        void (async () => {
-          const durationMs = this.elapsedMs();
-          const raw = new Blob(this.chunks, { type: chosen.mime });
-          this.chunks = [];
-          if (raw.size === 0) {
-            resolve(null);
-            return;
+    this.stopped = (async () => {
+      if (!this.ended) {
+        const settled = this.waitForEnd();
+        try {
+          recorder.stop();
+        } catch {
+          // already stopped by the browser: the latch above still releases us
+        }
+        await settled;
+      }
+      const durationMs = this.elapsedMs();
+      const raw = new Blob(this.chunks, { type: chosen.mime });
+      this.chunks = [];
+      if (raw.size === 0) return null;
+      let blob = raw;
+      let container = chosen.container;
+      let remuxed = false;
+      if (container !== 'mp4' && this.options.remux) {
+        try {
+          const converted = await this.options.remux(raw);
+          if (converted.size > 0) {
+            blob = converted;
+            container = 'mp4';
+            remuxed = true;
           }
-          let blob = raw;
-          let container = chosen.container;
-          let remuxed = false;
-          if (container !== 'mp4' && this.options.remux) {
-            try {
-              const converted = await this.options.remux(raw);
-              if (converted.size > 0) {
-                blob = converted;
-                container = 'mp4';
-                remuxed = true;
-              }
-            } catch {
-              // conversion is a nicety: keep the original rather than losing it
-            }
-          }
-          resolve({ blob, mime: blob.type, container, durationMs, bytes: blob.size, remuxed });
-        })();
-      });
-    });
-    try {
-      recorder.stop();
-    } catch {
-      // already stopped: the promise above still resolves
-    }
+        } catch {
+          // conversion is a nicety: keep the original rather than losing it
+        }
+      }
+      return { blob, mime: blob.type, container, durationMs, bytes: blob.size, remuxed };
+    })();
     return this.stopped;
   }
 
@@ -234,6 +266,8 @@ export class StreamRecorder {
     this.chunks = [];
     this.stopped = null;
     this.error = null;
+    this.ended = false;
+    this.endWaiters = [];
     this.pausedAt = null;
     this.pausedMs = 0;
     this.startedAt = 0;

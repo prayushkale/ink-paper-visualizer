@@ -5,7 +5,9 @@ import type { BlotReading } from '../rail/reading';
 
 /** Palette sentence shared by every part of the film. */
 export function paletteSentence(colors: readonly string[]): string {
-  return colors.length > 0 ? `Palette locked to ${colors.join(', ')}.` : '';
+  return colors.length > 0
+    ? `The pigment here runs to ${colors.join(', ')}; take those colours from the ink rather than imposing a scheme.`
+    : '';
 }
 
 export interface WorldPromptInput {
@@ -44,11 +46,13 @@ export function composeWorldPrompt(input: WorldPromptInput): string {
     `WORLD: ${mood.lead}`,
     `${pressure}`,
     '',
-    `MATERIAL: the world is made of ink and pigment on warm paper and keeps behaving like it. Shapes resolve into figures, weather and architecture without ever becoming literal illustration. ${paletteSentence(palette)}`,
+    `MATERIAL: the world is made of ink and pigment on warm paper and keeps behaving like it. ${paletteSentence(palette)}`,
     '',
-    'PRESERVE: preserve the paper-and-pigment surface, the locked palette, the film\'s unhurried curiosity, and its refusal to explain itself. Preserve whatever figures or places have already appeared.',
+    'PRESERVE: preserve the paper-and-pigment surface, the colours the pigment is currently running to, the film\'s unhurried curiosity, and its refusal to explain itself. Preserve whatever figures or places have already appeared.',
     '',
     'HOW THE FILM MOVES: the film is handed a new ink blot every few seconds, and each blot is an exact destination the picture must arrive at. Never announce a blot. Treat each incoming blot as something the world was already becoming.',
+    '',
+    'STARTING FROM THE INK: every segment of this film is already inside a real ink painting when it begins. Read the painting\'s actual forms and colours and carry them forward as the film moves. Never treat the painting as a texture, a filter or a purely abstract shape.',
     '',
     `OPENING: begin mid-motion, already underway — ${input.openingAction ?? 'a slow drift across the pigment as if the camera has been watching for a while'}.`,
     '',
@@ -87,6 +91,7 @@ export function composeVisionPrompt(input: VisionPromptInput): string {
     `- Mood pressure: ${input.moodStrength.toFixed(2)} of 1, where 1 means commit fully to the mood.`,
     `- Score: ${music.label} at about ${music.bpm} BPM — ${music.brief}.`,
     `- ${cameraLine}`,
+    '- The painting is a real, already-shot frame of this film. Find the specific thing it looks like and describe it vividly enough to film, with concrete nouns, real motion and a light source.',
     `- Beats so far (oldest first):`,
     history,
     '',
@@ -102,6 +107,8 @@ export interface DirectionInput {
   moodStrength: number;
   /** 'hard' means the final frame is pinned to the blot. */
   arrivalMode: 'hard' | 'soft';
+  /** Colours of the blot this beat is heading into, chosen at random. */
+  palette?: readonly string[];
 }
 
 /**
@@ -114,6 +121,9 @@ export function composeDirection(input: DirectionInput): string {
   if (reading.transition) parts.push(`${capitalise(reading.transition)}.`);
   if (reading.prompt) parts.push(reading.prompt.trim());
   else if (reading.subject) parts.push(`${capitalise(reading.subject)} emerges from the pigment and keeps moving.`);
+  if (input.palette && input.palette.length > 0) {
+    parts.push(`The ink this beat is heading into runs to ${input.palette.join(', ')}; let the picture take those colours from it.`);
+  }
 
   const moodClause = input.moodStrength >= 0.7
     ? `${mood.tail}`
@@ -124,7 +134,9 @@ export function composeDirection(input: DirectionInput): string {
 
   if (camera) parts.push(`${capitalise(camera.phrase)}.`);
   if (arrivalMode === 'hard') {
-    parts.push('The closing frame of this beat is fixed: resolve exactly into the incoming image, letting the pigment become it rather than cutting to it.');
+    parts.push('The closing frame of this beat is fixed: resolve exactly into the incoming ink painting, reading its real forms and letting the picture become them rather than cutting or fading to it. The take then keeps running from inside that painting, so the next segment starts on the ink itself.');
+  } else {
+    parts.push('Let the picture drift toward the incoming ink painting and keep the take running from inside it, with no cut.');
   }
   if (reading.sound) parts.push(`Sound: ${reading.sound.trim()}`);
   else parts.push(`Sound: ${music.accent}.`);

@@ -85,13 +85,24 @@ export class DirectorSession {
   lastChunk: ChunkInfo | null = null;
   /** Seconds of video the server has told us it generated. Drives the meter. */
   generatedSeconds = 0;
-  /** Wall-clock milliseconds the session has been live. */
-  liveMs = 0;
   fatalError: { code: StudioErrorCode; message: string } | null = null;
 
   private readonly events: DirectorSessionEvents;
   private readonly now: () => number;
   private liveSince: number | null = null;
+  /** Live time of every stretch that has already ended. */
+  private accumulatedLiveMs = 0;
+
+  /**
+   * Wall-clock milliseconds the session has been live.
+   *
+   * Counts the stretch that is still running: the chain controller retires a
+   * session before the server's ceiling, and it can only do that if this grows
+   * while the film is on air rather than only once it has stopped.
+   */
+  get liveMs(): number {
+    return this.accumulatedLiveMs + (this.liveSince === null ? 0 : Math.max(0, this.now() - this.liveSince));
+  }
 
   constructor(private readonly options: DirectorSessionOptions) {
     this.events = options.events ?? {};
@@ -185,8 +196,7 @@ export class DirectorSession {
     if (this.stopped) return;
     this.stopped = true;
     this.stopPing();
-    if (this.liveSince !== null) this.liveMs += this.now() - this.liveSince;
-    this.liveSince = null;
+    this.freezeLive();
     this.setStatus('stopping');
     try {
       this.connection?.send(buildStop());
@@ -218,10 +228,12 @@ export class DirectorSession {
         this.startPing();
         break;
       case 'failed':
+        this.freezeLive();
         this.setStatus('failed');
         break;
       case 'closed':
         this.stopPing();
+        this.freezeLive();
         if (!this.stopped) this.setStatus('ended');
         break;
       default:
@@ -234,6 +246,13 @@ export class DirectorSession {
     this.fatalError = { code: 'transport_error', message };
     this.events.onError?.({ code: 'transport_error', message });
     this.setStatus('failed', message);
+  }
+
+  /** Folds the running live stretch into the accumulator, exactly once. */
+  private freezeLive(): void {
+    if (this.liveSince === null) return;
+    this.accumulatedLiveMs += Math.max(0, this.now() - this.liveSince);
+    this.liveSince = null;
   }
 
   private startPing(): void {

@@ -174,14 +174,29 @@ export class BlotScheduler {
       }
       this.inFlight = null;
       this.awaitingDispatch = false;
-    } else if (this.awaitingDispatch && this.now() - this.lastSentAt > this.dispatchTimeoutMs) {
-      this.options.events?.onWarning?.(
-        `no chunk confirmed prompt version ${this.inFlight?.promptVersion ?? '?'} within ${this.dispatchTimeoutMs}ms; reopening the dispatch gate`,
-      );
-      this.inFlight = null;
-      this.awaitingDispatch = false;
+    } else {
+      this.checkDispatchTimeout();
     }
     this.tick();
+  }
+
+  /**
+   * Reopens the dispatch gate when a direction was never confirmed.
+   *
+   * A chunk that never arrives cannot be noticed from inside `onChunk`, and a
+   * session that fails to generate one still has a film to run, so this is
+   * called on the studio's heartbeat as well as on every late chunk. Returns
+   * true when the gate was actually reopened.
+   */
+  checkDispatchTimeout(): boolean {
+    if (!this.awaitingDispatch || !this.inFlight) return false;
+    if (this.now() - this.inFlight.sentAt <= this.dispatchTimeoutMs) return false;
+    this.options.events?.onWarning?.(
+      `no chunk confirmed prompt version ${this.inFlight.promptVersion} within ${this.dispatchTimeoutMs}ms; reopening the dispatch gate`,
+    );
+    this.inFlight = null;
+    this.awaitingDispatch = false;
+    return true;
   }
 
   onPromptRejected(info: { promptVersion: number; reason: string; error?: string | null }): void {
@@ -311,6 +326,7 @@ export class BlotScheduler {
       camera,
       moodStrength: episode.moodStrength,
       arrivalMode: episode.arrivalMode,
+      palette: blot.recipe.palette,
     });
     const prompt = shift ? `${shift} ${body}` : body;
     const version = this.options.session.direct({

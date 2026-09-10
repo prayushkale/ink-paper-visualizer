@@ -11,6 +11,7 @@ import {
   detectFfmpeg,
   isAllowedMediaUrl,
   isAllowedProxyTarget,
+  legibleFalError,
   matchesAny,
   upstreamErrorDetail,
   DEFAULT_ALLOWED_ENDPOINTS,
@@ -22,7 +23,7 @@ const HAS_FFMPEG = detectFfmpeg();
 const jsonRes = (body, status = 200) => ({
   ok: status < 300,
   status,
-  headers: { get: () => null },
+  headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'application/json' : null) },
   json: async () => body,
   text: async () => JSON.stringify(body),
 });
@@ -391,6 +392,62 @@ test('fal proxy surfaces upstream failures as 502', async () => {
   const res = await inject(app, 'POST', FAL_PROXY_ROUTE, {}, { 'x-fal-target-url': TARGET });
   assert.equal(res.status, 502);
   assert.match(res.body.error, /socket hang up/);
+});
+
+// ------------------------------------------------------- legible fal errors
+
+test('legibleFalError turns a fal detail string into a message', () => {
+  const rewritten = legibleFalError(JSON.stringify({ detail: 'Error initiating upload' }));
+  assert.deepEqual(JSON.parse(rewritten), { detail: 'Error initiating upload', message: 'Error initiating upload' });
+});
+
+test('legibleFalError joins the Pydantic detail array', () => {
+  const rewritten = legibleFalError(JSON.stringify({
+    detail: [{ msg: 'Field required', loc: ['body', 'file_name'] }, { msg: 'bad content type' }],
+  }));
+  assert.equal(JSON.parse(rewritten).message, 'Field required; bad content type');
+});
+
+test('legibleFalError leaves a body that already has a message alone', () => {
+  const body = JSON.stringify({ message: 'fine', detail: 'ignored' });
+  assert.equal(legibleFalError(body), null);
+});
+
+test('legibleFalError ignores anything that is not a JSON object', () => {
+  assert.equal(legibleFalError('<html>Internal Server Error</html>'), null);
+  assert.equal(legibleFalError(JSON.stringify({ detail: 42 })), null);
+  assert.equal(legibleFalError(JSON.stringify(['a'])), null);
+});
+
+// The storage service answers an upload it will not host with a 500 whose only
+// detail is a `detail` string, which the browser client reads as the bare HTTP
+// status text - "Internal Server Error". Add the `message` it looks for.
+test('fal proxy makes an upstream fal error body legible', async () => {
+  const app = withKeys(async () => jsonRes({ detail: 'Error initiating upload' }, 500));
+  const res = await inject(app, 'POST', FAL_PROXY_ROUTE, {
+    content_type: 'text/html', file_name: 'ambient-music-bed.mp3',
+  }, { 'x-fal-target-url': 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3' });
+  assert.equal(res.status, 500);
+  assert.equal(res.body.detail, 'Error initiating upload');
+  assert.equal(res.body.message, 'Error initiating upload');
+});
+
+test('fal proxy leaves a successful body and a non-JSON error untouched', async () => {
+  const ok = withKeys(async () => jsonRes({ file_url: 'https://v3b.fal.media/x.png' }));
+  const uploaded = await inject(ok, 'POST', FAL_PROXY_ROUTE, {}, {
+    'x-fal-target-url': 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3',
+  });
+  assert.deepEqual(uploaded.body, { file_url: 'https://v3b.fal.media/x.png' });
+
+  const html = withKeys(async () => ({
+    ok: false, status: 500, headers: { get: () => 'text/html' },
+    text: async () => '<html>Internal Server Error</html>',
+  }));
+  const broken = await inject(html, 'POST', FAL_PROXY_ROUTE, {}, {
+    'x-fal-target-url': 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3',
+  });
+  assert.equal(broken.status, 500);
+  assert.match(broken.text, /Internal Server Error/);
 });
 
 // -------------------------------------------------------------- media relay

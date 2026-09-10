@@ -95,13 +95,25 @@ seeded ink engine ──► blot ──► hosted on fal ──► vision model 
 ```
 
 1. **Ink.** A seed picks tools (drop, splatter, streak, curve, pool, drag, spray,
-   backrun), a palette, and a fold plan of 0–3 vertical/horizontal creases at a
-   centre or off-centre position. The canvas is rendered at the stream's aspect
-   ratio, because image-to-video inherits the ratio of the image you give it.
-2. **Imagining.** The vision model is handed the blot plus the running context —
-   mood, score, camera move, and the last several beats — and answers with
-   structured JSON. A model that answers in prose still produces a usable beat,
-   because a live film cannot stop to fix a parse.
+   backrun), draws 2–4 colours **at random** from the full pigment range, and
+   lays down a fold plan of 0–3 vertical/horizontal creases at a centre or
+   off-centre position. The canvas is rendered at the stream's aspect ratio,
+   because image-to-video inherits the ratio of the image you give it.
+
+   Nothing opens a paid session until the rail holds three ready blots, so
+   pressing **Start** runs a pre-flight first: paint, host, imagine and (when the
+   camera is on) orbit takes for each blot. It takes a minute or two, and the
+   overlay over the stage names the stage it is in, counts the blots and views
+   done, and runs an elapsed clock, because it costs nothing but looks like a
+   hang otherwise. **Stop** during the pre-flight cancels it before a session
+   ever opens.
+2. **Imagining.** The vision model — `deepseek/deepseek-v4.1-flash` by default —
+   is handed the blot plus the running context (mood, score, camera move, and the
+   last several beats) and is asked to find the specific thing the blot already
+   looks like, then describe it vividly enough to film. The reply is structured
+   JSON whose `prompt` becomes the video direction, and a model that answers in
+   prose still produces a usable beat, because a live film cannot stop to fix a
+   parse.
 3. **Orbits.** Multi Angle turns the blot into keyframed camera takes; the app
    extracts each clip's **final pose** (the model holds it to the end) and hosts
    it. Those stills are consistent views of the same frozen scene.
@@ -110,7 +122,8 @@ seeded ink engine ──► blot ──► hosted on fal ──► vision model 
    angles occupies three chunks: the blot, then two views of it.
 5. **Handover.** Just before the server's own ceiling the session is retired and
    a new one opens on the last frame (or on another angle, if you chose *turn*).
-   The recording keeps running across the seam, so the export is one file.
+   A `MediaRecorder` cannot be handed a second stream, so the seam also ends the
+   recording part: a chained run exports as one file per session.
 
 ### Why one direction per dispatched chunk
 
@@ -126,12 +139,20 @@ the gate if an acknowledgement never comes.
 
 | Group | Controls |
 |---|---|
+| **Quality preset** | **Low** (default, the cheapest: 480p, no orbit takes, one 60s session), **Medium** (768p, two angles, three minutes) and **High** (1080p, four angles, ten minutes). A preset writes resolution, orbit takes and the budget; every value stays editable |
 | **Stream** | resolution, frame (16:9 / 9:16 / 1:1), memory (1–50 prior beats), hard vs soft blot arrival, auto-chaining, seed |
-| **Mood** | ten presets, a 0–1 pressure dial, ink palette. Changing mood mid-film sends a direction, never a new session |
-| **Music** | ten genres, **pinned** (the track is conditioning audio: every chunk is generated against the next window of it) or **generated** (the model writes the score), track URL, dropped file |
+| **Mood** | ten presets and a 0–1 pressure dial. Changing mood mid-film sends a direction, never a new session |
+| **Music** | ten genres, **pinned** (the track is conditioning audio: every chunk is generated against the next window of it) or **generated** (the model writes the score, the default because `assets/music/` ships empty), track URL, dropped file |
 | **Camera** | which moves may be used, angles per blot (0–4), orbit resolution and length, circle twice, handover policy |
-| **Budget** | session and daily caps, session length, dry run |
+| **Budget** | session and daily caps, session length (10s–15m; Director still bills a 60s minimum per session), dry run |
 | **Vision** | the OpenRouter model and the prompt that turns a blot into a beat |
+
+**Pause / Play** stops the meter. Pausing ends the Director session (it cannot be
+resumed once stopped), finalises the recording, and keeps the frozen frame. Play
+opens a fresh session on that exact frame and starts a new recording part, so a
+paused film costs a new session minimum when it resumes. Because a session cannot
+be rejoined, **each pause produces its own downloadable file** — the telemetry
+lists every part. **Double-click the film** for fullscreen.
 
 A **share link** reproduces a run — recipe, mood, music, camera and budget — from
 a URL. `#watch=1` hides the configuration so the film can sit on a screen.
@@ -152,8 +173,9 @@ you get, **Download** pipes it through the local ffmpeg to a real h264/aac mp4
 with the moov atom at the front, which is what a social platform will accept.
 `/api/health` reports whether ffmpeg was found.
 
-Nothing is recorded until a session goes live, and the recording spans the whole
-chain, so one run is one file.
+Nothing is recorded until a session goes live. A `MediaRecorder` is bound to one
+stream, so the recording spans exactly one session: a chained or paused run
+exports one part per session, each offered separately for download.
 
 ---
 
@@ -219,11 +241,16 @@ protect money and continuity:
 | Symptom | Cause |
 |---|---|
 | "Not ready: FAL_KEY" | Missing from `.env`; restart `npm run dev`. |
-| The film starts then stops at ~2 minutes | The server declared a session ceiling. Leave auto-chaining on. |
+| The film starts then stops at ~2 minutes | The server declared a session ceiling, or the `low` quality preset's own 60s cap is in force. Leave auto-chaining on, or pick a longer preset. |
 | "the rail ran dry" | The vision model is slow or failing. The film continues without new blots. |
+| Start sits on "preparing the film" for a minute or two | The rail is painting, hosting, imagining and orbiting the first three blots before it spends anything. The overlay names the stage; Stop cancels it for free. |
 | A blot is dropped | Its upload, vision call or orbit failed twice. The rail invents another. |
+| "no bundled track at /assets/music/…" | The folder is empty, so the dev server answered with the app's HTML. The run falls back to a model-scored film: drop a file in `assets/music/`, paste a URL, or pick "Model scores it". |
+| "the pinned track was not accepted" | The URL reached the session but is not audio the model can condition on. |
+| "The stream failed" | The WebRTC peer died, or the server ended the session lease. The session is closed, the recording is kept, and Start opens a fresh one: a Director session can never be rejoined. |
 | Audio stops mid-film | The pinned track ran out. The rest of that session has no score. |
 | A webm with no mp4 | ffmpeg was not found on `PATH`. |
+| A fal call fails as a bare "Internal Server Error" | The proxy rewrites fal's `detail` into the `message` the browser client reads, so a fresh failure should name itself. Check the server console for the upstream body. |
 
 ## Legal
 

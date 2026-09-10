@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { InkStudio, type StudioView } from './studio';
-import { defaultSettings, type Settings } from '../state';
+import { InkStudio, type StudioOptions, type StudioView } from './studio';
+import { defaultSettings, applyQualityPreset, type Settings } from '../state';
 import { inkRecipeFromSeed } from '../ink/recipe';
 import type { MultiAngleInput } from '../angle/multiAngle';
 import type { HealthResponse } from '../api/client';
@@ -60,6 +60,9 @@ function fakeTimer() {
 interface HarnessOptions {
   settings?: Partial<Settings>;
   health?: Partial<HealthResponse>;
+  fetchTrack?: (url: string) => Promise<Blob>;
+  /** Overrides merged in last, for tests that need one port to hang or fail. */
+  ports?: Partial<StudioOptions>;
 }
 
 interface Harness {
@@ -80,9 +83,12 @@ interface Harness {
 }
 
 function harness(options: HarnessOptions = {}): Harness {
-  const settings = defaultSettings();
+  // most of these tests exercise the whole pipeline (orbits included), so the
+  // harness starts from the medium preset; the cheap shipped default has its
+  // own coverage in state.test.ts
+  const settings = applyQualityPreset(defaultSettings(), 'medium');
   Object.assign(settings, options.settings ?? {});
-  settings.music = { ...settings.music, mode: 'generated', resolvedUrl: null };
+  settings.music = { ...settings.music, mode: 'generated', resolvedUrl: null, ...(options.settings?.music ?? {}) };
   if (options.settings?.budget) settings.budget = { ...settings.budget, ...options.settings.budget };
   if (options.settings?.camera) settings.camera = { ...settings.camera, ...options.settings.camera };
 
@@ -147,6 +153,7 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     fetchTrack: async (url) => {
       calls.fetched.push(url);
+      if (options.fetchTrack) return options.fetchTrack(url);
       return new Blob([new Uint8Array(2048)], { type: 'audio/mpeg' });
     },
     probeDuration: async () => 120,
@@ -158,15 +165,25 @@ function harness(options: HarnessOptions = {}): Harness {
       clock.value += 300;
     },
     onView: (view) => views.push(view),
+    ...(options.ports ?? {}),
   });
 
   return { studio, transport, clock, timer, views, calls, settings };
 }
 
+/** A promise a test can hold open, for ports that must not settle yet. */
+function deferred(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** Starts the studio and drives the first session to live. */
-async function goLive(h: Harness): Promise<Record<string, unknown>> {
+async function goLive(h: Harness, maxSessionSeconds = 3600): Promise<Record<string, unknown>> {
   const result = await h.studio.start();
   expect(result.ok, result.error).toBe(true);
   const configure = h.transport.sent[0]!;
@@ -175,7 +192,7 @@ async function goLive(h: Harness): Promise<Record<string, unknown>> {
     type: 'session_info',
     app: 'minimax-h3-max-director',
     chunk_seconds: 10,
-    max_session_seconds: 120,
+    max_session_seconds: maxSessionSeconds,
     one_session_per_machine: true,
   });
   h.transport.server({
@@ -234,6 +251,93 @@ describe('InkStudio', () => {
     const result = await h.studio.start();
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/FAL_KEY/);
+    expect(h.transport.sent).toHaveLength(0);
+  });
+
+  it('adopts the server capabilities once /api/health answers', () => {
+    // the studio is built before the health fetch resolves, so the answer has
+    // to be handed over afterwards or the UI keeps calling ffmpeg missing
+    const h = harness({ health: { ffmpeg: false } });
+    expect(h.studio.view.capabilities.ffmpeg).toBe(false);
+    h.studio.setHealth({
+      openrouter: true,
+      fal: true,
+      realtime: true,
+      multiAngle: true,
+      proxyRoute: '/api/fal/proxy',
+      authTokenRequired: false,
+      ffmpeg: true,
+    });
+    expect(h.studio.view.capabilities.ffmpeg).toBe(true);
+
+    h.studio.setHealth(null);
+    expect(h.studio.view.capabilities.ffmpeg).toBe(false);
+  });
+
+  it('blames the track, not the server, when a pinned track could not be hosted', async () => {
+    const h = harness({
+      settings: { music: { ...defaultSettings().music, mode: 'pinned', musicId: 'trance' } },
+      // the dev server answers a missing bundled file with index.html
+      fetchTrack: async () => new Blob(['<!doctype html>'], { type: 'text/html' }),
+    });
+    const configure = await goLive(h);
+    expect(configure.audio_url).toBeUndefined();
+    h.transport.server({ type: 'configured', prompt_version: 1, has_initial_image: true, has_initial_audio: false });
+    const warnings = h.studio.view.warnings;
+    expect(warnings.some((line) => /no bundled track at/.test(line))).toBe(true);
+    expect(warnings.some((line) => /was not accepted/.test(line))).toBe(false);
+  });
+
+  it('reports a pinned track the server refused', async () => {
+    const h = harness({ settings: { music: { ...defaultSettings().music, mode: 'pinned', musicId: 'trance' } } });
+    const configure = await goLive(h);
+    expect(String(configure.audio_url)).toContain('trance-music-bed');
+    h.transport.server({ type: 'configured', prompt_version: 1, has_initial_image: true, has_initial_audio: false });
+    expect(h.studio.view.warnings.some((line) => /was not accepted/.test(line))).toBe(true);
+  });
+
+  it('reports what the pre-flight is waiting on, then stops reporting it', async () => {
+    const gate = deferred();
+    const h = harness({
+      // the orbit takes are what make the pre-flight slow: hold one open
+      ports: { multiAngleSubscribe: async () => { await gate.promise; return { video: { url: 'https://fal.media/o.mp4' } }; } },
+    });
+    const starting = h.studio.start();
+    await flush();
+
+    expect(h.studio.status).toBe('preflight');
+    const preparing = h.studio.view.preparing;
+    expect(preparing).not.toBeNull();
+    expect(preparing!.target).toBe(3);
+    expect(preparing!.ready).toBe(0);
+    expect(preparing!.working).toBe(3);
+    // three blots, two orbits each: the views counter is the real remaining work
+    expect(preparing!.anglesWanted).toBe(6);
+    expect(preparing!.stage).toBe('shooting');
+    expect(preparing!.elapsedMs).toBeGreaterThan(0);
+
+    gate.release();
+    await starting;
+    // once the session opens the overlay has nothing left to say
+    expect(h.studio.view.preparing).toBeNull();
+  });
+
+  it('a stop during the pre-flight never opens the session it was preparing', async () => {
+    const gate = deferred();
+    const h = harness({
+      ports: { multiAngleSubscribe: async () => { await gate.promise; return { video: { url: 'https://fal.media/o.mp4' } }; } },
+    });
+    const starting = h.studio.start();
+    await flush();
+    expect(h.studio.view.preparing).not.toBeNull();
+
+    await h.studio.stop('changed my mind');
+    expect(h.studio.status).toBe('idle');
+
+    gate.release();
+    const result = await starting;
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/pre-flight/);
     expect(h.transport.sent).toHaveLength(0);
   });
 
@@ -419,14 +523,51 @@ describe('InkStudio', () => {
     expect(again.error).toMatch(/already running/);
   });
 
-  it('stops when the session reports an unrecoverable error', async () => {
+  it('ends the run when the session reports an unrecoverable error', async () => {
     const h = harness();
     await goLive(h);
     h.transport.server({ type: 'error', code: 'balance_unavailable', error: 'no credit on the account', prompt_version: null });
     h.timer.beat();
     await flush();
-    expect(h.studio.status).toBe('ended');
+    // the session cannot continue, so the run is reported as failed rather than
+    // quietly finished, and the session is closed either way
+    expect(h.studio.status).toBe('failed');
+    expect(h.transport.sent.some((message) => message.type === 'stop')).toBe(true);
     expect(h.studio.view.log.map((line) => line.text).join(' ')).toMatch(/balance_unavailable/);
+    expect(h.studio.view.alerts.some((alert) => /balance_unavailable/.test(alert.text))).toBe(true);
+  });
+
+  it('keeps directing a session that never confirms a chunk', async () => {
+    // a chunk that never arrives cannot be noticed from inside onChunk, so the
+    // film would otherwise send one direction and wait on it forever
+    const h = harness();
+    await goLive(h);
+    const before = h.transport.sent.filter((message) => message.type === 'prompt').length;
+    h.clock.value += 40_000;
+    h.timer.beat();
+    await flush();
+    expect(h.transport.sent.filter((message) => message.type === 'prompt').length).toBeGreaterThan(before);
+    expect(h.studio.view.warnings.some((line) => /dispatch gate/.test(line))).toBe(true);
+  });
+
+  it('tears the run down when the transport dies mid-stream', async () => {
+    // a dead peer generates nothing more: the recorder, the heartbeat and the
+    // status all have to stop rather than sit on a black stage forever
+    const h = harness();
+    await goLive(h);
+    h.transport.server(chunk({ chunk_index: 0, prompt_version: 2 }));
+    await flush();
+    h.transport.state('failed');
+    await flush();
+    expect(h.studio.status).toBe('failed');
+    expect(h.transport.sent.some((message) => message.type === 'stop')).toBe(true);
+    expect(h.studio.view.alerts.some((alert) => alert.kind === 'error')).toBe(true);
+    // the heartbeat is gone, so nothing keeps pumping the rail behind the scenes
+    const logLength = h.studio.view.log.length;
+    h.timer.beat();
+    h.timer.beat();
+    await flush();
+    expect(h.studio.view.log.length).toBe(logLength);
   });
 
   it('warns rather than stopping when the model falls behind playback', async () => {
@@ -480,6 +621,70 @@ describe('InkStudio', () => {
     const h = harness({ health: { ffmpeg: false } });
     await goLive(h);
     expect(h.studio.view.capabilities.ffmpeg).toBe(false);
+  });
+
+  it('pauses by closing the session and reopens on play', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
+    await goLive(h);
+    // confirm the opening direction so the dispatch gate is open
+    h.transport.server(chunk({ chunk_index: 0, prompt_version: 2 }));
+    await flush();
+    const promptsBefore = h.transport.sent.filter((message) => message.type === 'prompt').length;
+    const configuresBefore = h.transport.sent.filter((message) => message.type === 'configure').length;
+    h.studio.pauseFilm();
+    expect(h.studio.status).toBe('paused');
+    await flush();
+    // the session was actually closed, which is what stops the meter
+    expect(h.transport.sent.some((message) => message.type === 'stop')).toBe(true);
+    // a chunk arriving while paused must not turn into a new direction
+    h.transport.server(chunk({ chunk_index: 1, prompt_version: 3 }));
+    await flush();
+    expect(h.transport.sent.filter((message) => message.type === 'prompt').length).toBe(promptsBefore);
+    // play opens a fresh session, not a resumed one
+    h.studio.resumeFilm();
+    await flush();
+    expect(h.transport.sent.filter((message) => message.type === 'configure').length).toBe(configuresBefore + 1);
+    h.transport.state('live');
+    expect(h.studio.status).toBe('live');
+  });
+
+  it('stops and queues a toast when the session time cap is reached', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 20, dryRun: false } } });
+    await goLive(h);
+    h.transport.server(chunk({ chunk_index: 0, prompt_version: 2 }));
+    await flush();
+    h.transport.server(chunk({ chunk_index: 1, prompt_version: 3 }));
+    await flush();
+    expect(h.studio.status).toBe('ended');
+    const alerts = h.studio.view.alerts;
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[alerts.length - 1]!.text).toMatch(/session time cap/i);
+    expect(alerts[alerts.length - 1]!.kind).toBe('warn');
+  });
+
+  it('enforces a session cap chosen after the studio was built', async () => {
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
+    await goLive(h);
+    // a preset/slider change has to reach the guard that actually enforces it
+    h.studio.updateSettings({ budget: { ...h.settings.budget, sessionCapSeconds: 10 } });
+    h.transport.server(chunk({ chunk_index: 0, prompt_version: 2 }));
+    await flush();
+    expect(h.studio.status).toBe('ended');
+    expect(h.studio.view.alerts.some((alert) => /session time cap/i.test(alert.text))).toBe(true);
+  });
+
+  it('stops itself at the ceiling the server declares', async () => {
+    // the server's own ceiling is shorter than the configured cap, so the meter
+    // has to be the thing that ends the session rather than the server cutting in
+    const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
+    await goLive(h, 20);
+    h.transport.server(chunk({ chunk_index: 0, prompt_version: 2 }));
+    await flush();
+    expect(h.studio.status).toBe('live');
+    h.transport.server(chunk({ chunk_index: 1, prompt_version: 3 }));
+    await flush();
+    expect(h.studio.status).toBe('ended');
+    expect(h.studio.view.alerts.some((alert) => /session time cap of 20s/i.test(alert.text))).toBe(true);
   });
 });
 

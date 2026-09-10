@@ -147,6 +147,41 @@ const REMUX_LIMIT_BYTES = 2 * 1024 * 1024 * 1024;
  * sentence in `error.metadata.raw` as a JSON string. Without this a bad image
  * or a model the provider will not serve is invisible in the UI.
  */
+/**
+ * fal reports its own failures as `detail` (a string, or the Pydantic array),
+ * but the browser client only knows how to read `message`: everything else
+ * collapses to the HTTP status text, so a storage refusal reads
+ * "Internal Server Error" and the actual complaint is invisible.
+ *
+ * Rewrites an error body to add `message`, leaving everything else intact.
+ * Returns null when there is nothing to add (or the body is not a JSON object).
+ */
+export function legibleFalError(text) {
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return null;
+  if (typeof body.message === 'string' && body.message.trim() !== '') return null;
+
+  const { detail } = body;
+  let message;
+  if (typeof detail === 'string') {
+    message = detail;
+  } else if (Array.isArray(detail)) {
+    message = detail
+      .map((item) => (typeof item === 'string' ? item : typeof item?.msg === 'string' ? item.msg : null))
+      .filter(Boolean)
+      .join('; ');
+  } else if (typeof body.error === 'string') {
+    message = body.error;
+  }
+  if (!message || message.trim() === '') return null;
+  return JSON.stringify({ ...body, message });
+}
+
 export function upstreamErrorDetail(bodyError) {
   const raw = bodyError?.metadata?.raw;
   if (typeof raw !== 'string' || raw.trim() === '') return null;
@@ -295,8 +330,15 @@ export function createServer({
         init.body = JSON.stringify(req.body ?? {});
       }
       const upstream = await fetchImpl(target, init);
+      const contentType = upstream.headers?.get?.('content-type') ?? '';
+      // A failed call is small and worth buffering: fal names the reason in
+      // `detail`, and the client can only show `message`.
+      if (upstream.status >= 400 && contentType.includes('application/json')) {
+        const raw = await upstream.text();
+        res.setHeader('content-type', 'application/json');
+        return res.status(upstream.status).send(legibleFalError(raw) ?? raw);
+      }
       const body = upstream.body ?? (await upstream.text?.());
-      const contentType = upstream.headers?.get?.('content-type');
       if (contentType) res.setHeader('content-type', contentType);
       res.status(upstream.status);
       if (body == null) return res.end();

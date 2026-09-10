@@ -2,15 +2,17 @@ import {
   CHUNK_SECONDS,
   DEFAULT_STUDIO_PROMPT,
   DIRECTOR_RATE,
+  QUALITY_IDS,
+  QUALITY_PRESETS,
   estimateRun,
   minutesLabel,
+  qualityPresetDrifted,
   usd,
   type Settings,
 } from '../state';
 import { CAMERA_MOVES, CAMERA_MOVE_IDS, type CameraConfig, type CameraMoveId } from '../presets/camera';
 import { MOODS, MOOD_IDS, type MoodId } from '../presets/moods';
 import { MUSIC_IDS, MUSIC_PRESETS, musicById, type MusicId } from '../presets/music';
-import { INK_PALETTES, PALETTE_IDS } from '../ink/recipe';
 import { renderOps } from '../ink/recipe';
 import { orbitDiagram } from './rail';
 import type { StudioView } from '../studio/studio';
@@ -20,9 +22,9 @@ function esc(text: string): string {
 }
 
 export interface ControlActions {
+  setQuality(id: Settings['quality']): void;
   setMood(id: MoodId): void;
   setMoodStrength(value: number): void;
-  setPalette(id: string): void;
   setSeed(value: string): void;
   reroll(): void;
   setMusic(id: MusicId): void;
@@ -54,6 +56,20 @@ export function renderControls(
   const lockedNote = live ? '<p class="muted small">Locked while a session is open — restart to change.</p>' : '';
 
   root.innerHTML = `
+    <section class="preset-block">
+      <div class="preset-head">
+        <h3>Quality preset</h3>
+        <span class="muted small">${qualityPresetDrifted(settings) ? 'customised' : 'applied'}</span>
+      </div>
+      <div class="segmented preset-seg">
+        ${QUALITY_IDS.map((id) => `
+          <button class="${settings.quality === id ? 'on' : ''}" data-action="quality" data-value="${id}">
+            ${QUALITY_PRESETS[id].label}
+          </button>`).join('')}
+      </div>
+      <p class="muted small">${esc(QUALITY_PRESETS[settings.quality].blurb)} This writes resolution, orbit takes and the budget; every value stays editable below.</p>
+    </section>
+
     <details open>
       <summary>Stream</summary>
       <div class="pad">
@@ -115,15 +131,7 @@ export function renderControls(
           <input type="range" min="0" max="1" step="0.05" value="${settings.moodStrength}" data-input="moodStrength" />
         </label>
         <p class="muted small">At 1 the mood colours every frame; at 0 the film keeps its own momentum. Changing mood mid-film sends a direction, never a new session.</p>
-        <label>Ink palette
-          <select data-change="palette">
-            ${PALETTE_IDS.map((id) => `
-              <option value="${id}" ${sameColors(INK_PALETTES[id]!, settings.ink.palette) ? 'selected' : ''}>${id}</option>`).join('')}
-          </select>
-        </label>
-        <div class="swatches">
-          ${settings.ink.palette.map((color) => `<span class="swatch" style="background:${esc(color)}" title="${esc(color)}"></span>`).join('')}
-        </div>
+        <p class="muted small">Ink colours are drawn at random for every blot, so the film wanders through the whole pigment range instead of one palette.</p>
       </div>
     </details>
 
@@ -203,8 +211,9 @@ export function renderControls(
           <input type="range" min="1" max="200" step="1" value="${settings.budget.dailyCapUsd}" data-input="budget.dailyCapUsd" />
         </label>
         <label>Session length <span class="muted">${minutesLabel(settings.budget.sessionCapSeconds)}</span>
-          <input type="range" min="60" max="900" step="30" value="${settings.budget.sessionCapSeconds}" data-input="budget.sessionCapSeconds" />
+          <input type="range" min="10" max="900" step="10" value="${settings.budget.sessionCapSeconds}" data-input="budget.sessionCapSeconds" />
         </label>
+        <p class="muted small">Shorter than 60s is allowed, but Director bills a 60s minimum per session, so a 20s session still costs a minute.</p>
         <label class="check">
           <input type="checkbox" data-change="budget.dryRun" ${settings.budget.dryRun ? 'checked' : ''} />
           Dry run — rehearse the whole pipeline, spend nothing
@@ -242,10 +251,6 @@ function estimateLine(settings: Settings): string {
   });
   return `One full session of ${minutesLabel(settings.budget.sessionCapSeconds)}: ${estimate.beats} destinations over ${estimate.blots} blot${estimate.blots === 1 ? '' : 's'}, `
     + `${estimate.angleTakes} orbit takes ≈ ${usd(estimate.totalUsd)} (Director ${usd(estimate.directorUsd)} + orbits ${usd(estimate.angleUsd)}).`;
-}
-
-function sameColors(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((color, index) => color === b[index]);
 }
 
 export { DEFAULT_STUDIO_PROMPT };

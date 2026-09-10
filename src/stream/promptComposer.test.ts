@@ -55,6 +55,11 @@ describe('composeWorldPrompt', () => {
     expect(world).toMatch(/OPENING: begin mid-motion/);
   });
 
+  it('states that every segment begins inside a real ink painting', () => {
+    expect(world).toMatch(/STARTING FROM THE INK/);
+    expect(world).toMatch(/real ink painting/);
+  });
+
   it('describes a pinned score as a condition, not a suggestion', () => {
     const pinned = composeWorldPrompt({ mood, music, palette, moodStrength: 0.7, musicPinned: true });
     expect(pinned).toMatch(/pinned to this film/);
@@ -188,6 +193,15 @@ describe('composeDirection', () => {
     });
     expect(loose).toMatch(/wherever it is already going/);
     expect(tight.toLowerCase()).toContain(mood.tail.toLowerCase());
+  });
+
+  it('names the random palette the beat is heading into', () => {
+    const withPalette = composeDirection({
+      reading: reading(), mood, music, camera: null, moodStrength: 0.5, arrivalMode: 'hard',
+      palette: ['#123456', '#abcdef'],
+    });
+    expect(withPalette).toContain('#123456');
+    expect(withPalette).toContain('#abcdef');
   });
 
   it('produces a single line that fits comfortably in a prompt field', () => {

@@ -180,6 +180,25 @@ describe('StreamRecorder', () => {
     await expect(recorder.stop()).resolves.toBeNull();
   });
 
+  it('finalises a recording whose stream died on its own', async () => {
+    // the browser stops a MediaRecorder by itself once every track of its stream
+    // has ended, which is what a dead session looks like. stop() must not wait
+    // for an event that already fired.
+    const fake = fakeRecorder();
+    let clock = 0;
+    const recorder = new StreamRecorder({
+      support: support('video/webm'),
+      createRecorder: () => fake.recorder,
+      now: () => clock,
+    });
+    recorder.start(stream);
+    clock = 9000;
+    fake.emit('dataavailable', { data: new Blob([new Uint8Array(128)], { type: 'video/webm' }) });
+    fake.emit('stop', {}); // the stream went inactive without anyone asking
+    const recording = await recorder.stop();
+    expect(recording).toMatchObject({ container: 'webm', bytes: 128, durationMs: 9000 });
+  });
+
   it('keeps the original file when the remux fails', async () => {
     const fake = fakeRecorder();
     const recorder = new StreamRecorder({

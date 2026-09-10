@@ -69,6 +69,7 @@ html, body {
 .pill.status-live .dot { background: var(--ok); box-shadow: 0 0 0 3px #5fbf8a22; }
 .pill.status-live { border-color: #2f5a45; }
 .pill.status-connecting .dot, .pill.status-preflight .dot, .pill.status-chaining .dot { background: var(--accent); }
+.pill.status-paused .dot { background: var(--accent); box-shadow: 0 0 0 3px #d8a24a22; }
 .pill.status-stopping .dot, .pill.status-ended .dot { background: var(--muted); }
 .pill.status-failed .dot, .pill.status-failed { border-color: #5a2f2f; color: #f0b3a8; }
 .pill.spend { border-color: var(--accent-soft); }
@@ -174,6 +175,30 @@ main {
   display: flex; flex-direction: column; gap: 8px;
   pointer-events: none; font-size: 12px;
 }
+/* `display: flex` above would otherwise defeat the `hidden` attribute the shell
+   uses to take the overlay off the film */
+#hud[hidden] { display: none; }
+
+/* ------------------------------------------------------- pre-flight overlay */
+
+#preparing {
+  position: absolute; inset: 0; z-index: 3;
+  display: grid; place-items: center; padding: 24px; text-align: center;
+  background: radial-gradient(circle at 50% 45%, #131119 0%, #08070a 72%);
+}
+#preparing[hidden] { display: none; }
+.preparing-card { display: flex; flex-direction: column; gap: 10px; width: min(420px, 100%); }
+.preparing-title {
+  margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted);
+}
+.preparing-stage { margin: 0; font-size: 16px; color: #f4efe6; }
+.preparing-meta {
+  display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 0;
+  font: 11px/1.3 ui-monospace, monospace; color: var(--muted);
+}
+.preparing-meta strong { color: #f4efe6; }
+.preparing-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+
 .hud-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .hud-cell {
   background: #000000a8; border: 1px solid #ffffff1c; border-radius: 999px;
@@ -236,8 +261,6 @@ select:disabled, input:disabled { opacity: 0.55; }
 .segmented { display: flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
 .segmented button { flex: 1; border: 0; border-radius: 0; min-height: 36px; }
 .segmented button.on { background: var(--accent-soft); color: #f6e4c4; }
-.swatches { display: flex; gap: 6px; }
-.swatch { width: 22px; height: 22px; border-radius: 5px; border: 1px solid #ffffff22; }
 
 .muted { color: var(--muted); }
 .small { font-size: 11px; line-height: 1.5; }
@@ -289,6 +312,28 @@ select:disabled, input:disabled { opacity: 0.55; }
   background: var(--paper); color: #221a08; padding: 10px 16px; border-radius: 999px;
   font-size: 13px; font-weight: 600; z-index: 40; max-width: 90vw; overflow-wrap: anywhere;
 }
+.toast-warn { background: var(--warn); }
+.toast-error { background: var(--bad); color: #2a1b1c; }
+
+/* ---------------------------------------------------------------- preset */
+
+.preset-block {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, #1b1a22, var(--panel));
+}
+.preset-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.preset-head h3 {
+  margin: 0; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted);
+}
+.preset-seg button { min-height: 34px; }
+.preset-block .muted.small { margin: 0; }
+
+/* ------------------------------------------------------------ fullscreen */
+
+#film:fullscreen { background: #000; }
+#film:fullscreen video { width: 100vw; height: 100vh; }
 
 /* ------------------------------------------------------------- filmstrip */
 

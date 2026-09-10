@@ -4,7 +4,7 @@ import { musicById } from '../presets/music';
 import { inkRecipeFromSeed } from '../ink/recipe';
 import { canvasForAspect, type AspectRatio, type InkRecipe } from '../ink/types';
 import type { RenderedBlot } from '../ink/render';
-import { BlotRail, DEFAULT_RAIL_OPTIONS, type BlotJob, type BlotState, type RailPorts } from '../rail/queue';
+import { BlotRail, DEFAULT_RAIL_OPTIONS, type BlotJob, type BlotState, type RailPorts, type RailProgress } from '../rail/queue';
 import { createStudioInterpreter, type VisionCaller } from '../rail/interpreter';
 import { buildMultiAngleInput, type MultiAngleInput } from '../angle/multiAngle';
 import { MusicBed, generatedScoreBrief, type PinnedTrack } from '../audio/musicBed';
@@ -28,9 +28,28 @@ import type { DirectorTransport } from '../stream/transport';
 import type { HealthResponse } from '../api/client';
 import type { SharedSettings } from '../share/recipe';
 
+/**
+ * How long the pre-flight may spend warming the rail before it gives up.
+ *
+ * A blot needs a render, an upload, a vision call and two orbit takes, and an
+ * orbit take can run into tens of seconds on its own, so a 45s ceiling fired on
+ * a rail that was working perfectly well.
+ */
+export const PREFLIGHT_WAIT_MS = 150_000;
+
+/** How often the pre-flight overlay repaints while the rail warms up. */
+export const PREFLIGHT_TICK_MS = 500;
+
 export interface LogLine {
   at: number;
   kind: 'info' | 'server' | 'warn' | 'error';
+  text: string;
+}
+
+/** A one-shot message the shell turns into a toast. */
+export interface StudioAlert {
+  id: number;
+  kind: 'info' | 'warn' | 'error';
   text: string;
 }
 
@@ -84,7 +103,7 @@ export interface StudioView {
   current: { blotId: string | null; subject: string | null; cameraLabel: string | null } | null;
   memory: string[];
   log: LogLine[];
-  recording: { state: string; container: string | null; durationMs: number; bytes: number; result: Recording | null };
+  recording: { state: string; container: string | null; durationMs: number; bytes: number; result: Recording | null; parts: Recording[] };
   music: {
     label: string;
     mode: string;
@@ -96,6 +115,14 @@ export interface StudioView {
   capabilities: { ffmpeg: boolean; sessionMaxSeconds: number | null; oneSessionPerMachine: boolean };
   sessionInfo: SessionInfo | null;
   warnings: string[];
+  /** Newest-last. The shell toasts each id exactly once. */
+  alerts: StudioAlert[];
+  /**
+   * Live progress of the pre-flight, or null once a session is opening. The wait
+   * before the first frame is a minute or two of paid-for-by-nothing work, so it
+   * has to say what it is doing.
+   */
+  preparing: (RailProgress & { elapsedMs: number }) | null;
 }
 
 export interface StudioOptions {
@@ -152,14 +179,38 @@ export class InkStudio {
   private statusValue: StudioStatus = 'idle';
   private logLines: LogLine[] = [];
   private warnings: string[] = [];
+  private alerts: StudioAlert[] = [];
+  private alertSeq = 0;
+  /** True while the user has paused the film; survives a chained session. */
+  private pausedByUser = false;
   private lastChunk: ChunkInfo | null = null;
   private bufferingUntil = 0;
   private heartbeat: unknown = null;
   private tickCount = 0;
   private recordingResult: Recording | null = null;
+  /** One recording per session, because a paused session cannot be rejoined. */
+  private recordings: Recording[] = [];
+  /** The frame the pause froze, used to open the next session on Play. */
+  private pausedFrameUrl: string | null = null;
+  /** In-flight pause teardown, so Play and Stop cannot race it. */
+  private pauseWork: Promise<void> | null = null;
+  private resuming = false;
   private musicStatus = 'not resolved';
   private pinned: PinnedTrack | null = null;
   private starting = false;
+  /** Set when Stop lands during the pre-flight, so the start unwinds instead of opening a session. */
+  private startCancelled = false;
+  /** True while a failed run is being torn down, so the teardown happens once. */
+  private failing = false;
+  /**
+   * The opening blot's own painting, shown as the player's poster until the
+   * first generated frame arrives, so the stage is never a bare black rectangle.
+   */
+  private openingPoster: string | null = null;
+  /** When the current pre-flight began, for the overlay's elapsed clock. */
+  private preflightStartedAt = 0;
+  /** Refresh handle for the pre-flight overlay; null when no run is warming up. */
+  private preflightTicker: unknown = null;
   private idCounter = 0;
   private seedCounter = 0;
 
@@ -294,6 +345,7 @@ export class InkStudio {
         durationMs: this.recorder.elapsedMs(),
         bytes: this.recordingResult?.bytes ?? 0,
         result: this.recordingResult,
+        parts: this.recordings,
       },
       music: {
         label: musicById(settings.music.musicId).label,
@@ -310,6 +362,8 @@ export class InkStudio {
       },
       sessionInfo: this.session?.sessionInfo ?? null,
       warnings: this.warnings,
+      alerts: this.alerts,
+      preparing: this.preparingView(),
     };
   }
 
@@ -322,7 +376,8 @@ export class InkStudio {
       camera: settings.camera,
       moodStrength: settings.moodStrength,
       arrivalMode: settings.stream.arrivalMode,
-      palette: settings.ink.palette.length > 0 ? settings.ink.palette : mood.palette,
+      // colours are drawn per blot now, so nothing is locked in advance
+      palette: [],
     };
   }
 
@@ -369,10 +424,10 @@ export class InkStudio {
       invent: (seed) => {
         const settings = options.settings;
         const mood = moodById(settings.moodId);
+        // no palette is handed in: every blot draws its own random colours
         return inkRecipeFromSeed({
           seed,
           canvas: canvasForAspect(settings.stream.aspectRatio),
-          palette: settings.ink.palette.length > 0 ? settings.ink.palette : mood.palette,
           tools: mood.tools,
           folds: 'auto',
         });
@@ -437,19 +492,33 @@ export class InkStudio {
 
   /** Prepares everything paid-for, then opens the first session. */
   async start(): Promise<{ ok: boolean; error?: string }> {
-    if (this.starting || this.statusValue === 'live' || this.statusValue === 'connecting' || this.statusValue === 'preflight') {
+    if (this.starting || this.failing) {
+      return { ok: false, error: 'the last run is still shutting down' };
+    }
+    if (this.statusValue === 'live' || this.statusValue === 'connecting' || this.statusValue === 'preflight') {
       return { ok: false, error: 'already running' };
     }
     if (this.options.health && !this.options.health.fal) {
       return { ok: false, error: 'FAL_KEY is missing from the server .env' };
     }
     this.starting = true;
+    this.startCancelled = false;
+    this.failing = false;
     this.warnings = [];
+    this.alerts = [];
+    this.pausedByUser = false;
+    this.pausedFrameUrl = null;
+    this.pauseWork = null;
+    this.resuming = false;
+    this.recordings = [];
+    this.recordingResult = null;
     this.setStatus('preflight');
+    this.beginPreflight();
     this.log('info', 'preparing the first blot');
     try {
       await this.rail.pump();
       const opening = await this.waitForBlot();
+      if (this.startCancelled) return { ok: false, error: 'stopped during the pre-flight' };
       if (!opening || !opening.url) {
         this.setStatus('idle');
         return { ok: false, error: 'could not prepare a blot — check the vision model and the fal key' };
@@ -461,7 +530,7 @@ export class InkStudio {
       const world = composeWorldPrompt({
         mood,
         music,
-        palette: settings.ink.palette.length > 0 ? settings.ink.palette : mood.palette,
+        palette: opening.recipe.palette,
         moodStrength: settings.moodStrength,
         musicPinned: pinned !== null,
         scoreBrief: pinned ? undefined : generatedScoreBrief(music, mood.energy),
@@ -478,6 +547,7 @@ export class InkStudio {
       this.setStatus('idle');
       return { ok: false, error: message };
     } finally {
+      this.endPreflight();
       this.starting = false;
     }
   }
@@ -485,15 +555,29 @@ export class InkStudio {
   /** Stops the film and finalises the recording. */
   async stop(reason = 'stopped by the user'): Promise<void> {
     if (this.statusValue === 'idle' || this.statusValue === 'ended' || this.statusValue === 'stopping') return;
+    // a failed run has already been torn down, and committing its spend again
+    // would bill the day's meter twice for one session
+    if (this.statusValue === 'failed') return;
+    // A pre-flight has no session to close yet, so stopping it means cancelling
+    // the start: without this the run would keep warming the rail and open a
+    // paying session seconds after the user stopped it.
+    if (this.statusValue === 'preflight') {
+      this.startCancelled = true;
+      this.setStatus('idle');
+      this.log('info', 'stopped before a session opened; nothing was billed');
+      this.emit();
+      return;
+    }
+    // if a pause is still tearing the session down, let it finish first
+    if (this.pauseWork) await this.pauseWork;
+    this.pausedByUser = false;
     this.setStatus('stopping');
     this.log('info', `stopping: ${reason}`);
     this.stopHeartbeat();
     this.frameGrabber?.stop();
-    if (this.recorder.state === 'recording' || this.recorder.state === 'paused') {
-      this.recordingResult = await this.recorder.stop();
-      if (this.recordingResult) {
-        this.log('info', `recording kept: ${this.recordingResult.container}, ${Math.round(this.recordingResult.bytes / 1024)} KB`);
-      }
+    await this.finishRecording();
+    if (this.recordingResult) {
+      this.log('info', `recording kept: ${this.recordingResult.container}, ${Math.round(this.recordingResult.bytes / 1024)} KB`);
     }
     this.budget.commitSession();
     const session = this.session;
@@ -503,19 +587,153 @@ export class InkStudio {
     this.emit();
   }
 
-  pauseRecording(): void {
-    if (this.recorder.state !== 'recording') return;
-    this.recorder.pause();
-    this.statusValue = 'paused';
-    this.log('info', 'recording paused; the film is still running and still billing');
+  /**
+   * Tears the run down after the stream itself failed.
+   *
+   * A dead session is terminal: nothing will generate another chunk, so leaving
+   * the studio alone would keep a recorder running over a dead stream, keep the
+   * heartbeat warming the rail with paid vision calls, and leave the user
+   * looking at a black stage under a status pill that never changes. The
+   * recording is finalised and kept, and the run is reported as failed rather
+   * than quietly finished.
+   */
+  private async failRun(reason: string): Promise<void> {
+    if (this.failing) return;
+    if (this.statusValue === 'idle' || this.statusValue === 'ended' || this.statusValue === 'stopping') return;
+    if (this.statusValue === 'preflight') {
+      // no session to fail: this is an ordinary cancellation of the pre-flight
+      this.startCancelled = true;
+      this.setStatus('idle');
+      this.warn(`the run stopped before it started: ${reason}`);
+      this.emit();
+      return;
+    }
+    this.failing = true;
+    this.pausedByUser = false;
+    this.setStatus('failed');
+    this.notify('error', `The stream failed (${reason}). The session was closed and the recording was kept.`);
+    this.error(`the run failed: ${reason}`);
+    this.stopHeartbeat();
+    this.frameGrabber?.stop();
+    this.chain.recordFailure();
+    try {
+      await this.finishRecording();
+      if (this.recordingResult) {
+        this.log('info', `recording kept: ${this.recordingResult.container}, ${Math.round(this.recordingResult.bytes / 1024)} KB`);
+      }
+      this.budget.commitSession();
+    } catch (error) {
+      this.warn(`could not keep the recording: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const session = this.session;
+    this.session = null;
+    try {
+      await session?.stop();
+    } catch {
+      /* the peer is already gone; releasing it is what matters */
+    }
+    // the session reports its own teardown as 'ended': this run did not end,
+    // it failed, and that is what the person watching has to see
+    this.setStatus('failed');
+    this.failing = false;
     this.emit();
   }
 
-  resumeRecording(): void {
-    if (this.recorder.state !== 'paused') return;
-    this.recorder.resume();
-    this.statusValue = 'live';
+  /**
+   * Pauses the film by ending the paid session.
+   *
+   * A Director session cannot be resumed once it is stopped, so this is the
+   * only way to actually stop the meter mid-film: the current session is closed,
+   * the recording is finalised, and the last picture is kept. Play opens a fresh
+   * session on that exact frame, which is why a pause costs a new session
+   * minimum.
+   */
+  pauseFilm(): void {
+    if (this.pausedByUser) return;
+    if (this.statusValue !== 'live' && this.statusValue !== 'connecting' && this.statusValue !== 'chaining') return;
+    this.pausedByUser = true;
+    this.setStatus('paused');
+    this.notify('info', 'Film paused — the session is closed and the meter is stopped.');
+    this.log('info', 'pausing: closing the session; Play opens a new one on this frame');
+    this.pauseWork = this.settlePause().catch((error) => {
+      this.warn(`pause stumbled: ${error instanceof Error ? error.message : String(error)}`);
+    });
     this.emit();
+  }
+
+  /** Freezes the picture, keeps its last frame, and tears the session down. */
+  private async settlePause(): Promise<void> {
+    this.stopHeartbeat();
+    try {
+      const frame = (await this.frameGrabber?.grabNow()) ?? this.frameGrabber?.latest() ?? null;
+      if (frame) {
+        this.pausedFrameUrl = await this.options.upload(frame.blob, `paused-${this.chain.chainCount + 2}.jpg`);
+      }
+    } catch (error) {
+      this.warn(`could not keep the paused frame: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.frameGrabber?.stop();
+    this.videoElement?.pause();
+    // stop the recorder before the stream goes away, so this part is not lost
+    await this.finishRecording();
+    this.budget.commitSession();
+    // the paused session is over: zero the counters so a later stop cannot bill
+    // it a second time
+    this.budget.beginSession();
+    const session = this.session;
+    this.session = null;
+    await session?.stop();
+    this.emit();
+  }
+
+  /** Finalises the current recording part, if one is running. */
+  private async finishRecording(): Promise<void> {
+    if (this.recorder.state === 'recording' || this.recorder.state === 'paused') {
+      const part = await this.recorder.stop();
+      if (part) this.recordings = [...this.recordings, part];
+    }
+    this.recorder.reset();
+    this.recordingResult = this.recordings[this.recordings.length - 1] ?? null;
+  }
+
+  /**
+   * Opens a new session on the frame the pause froze and starts playing again.
+   * The session minimum applies again.
+   */
+  resumeFilm(): void {
+    if (!this.pausedByUser || this.resuming) return;
+    this.resuming = true;
+    void (async () => {
+      try {
+        await this.pauseWork;
+        this.pausedByUser = false;
+        const settings = this.options.settings;
+        const mood = moodById(settings.moodId);
+        const music = musicById(settings.music.musicId);
+        const pinnedUrl = this.pinned?.url ?? null;
+        const world = composeWorldPrompt({
+          mood,
+          music,
+          palette: [],
+          moodStrength: settings.moodStrength,
+          musicPinned: pinnedUrl !== null,
+          scoreBrief: pinnedUrl ? undefined : generatedScoreBrief(music, mood.energy),
+          openingAction: 'already mid-motion, continuing the take the pause interrupted',
+        });
+        if (!this.pausedFrameUrl) {
+          this.warn('no frame was kept from before the pause; the new session starts from the prompt alone');
+        }
+        this.openSession({ worldPrompt: world, imageUrl: this.pausedFrameUrl, audioUrl: pinnedUrl });
+        this.pausedFrameUrl = null;
+        this.log('info', 'resuming: a new session opened on the paused frame');
+      } catch (error) {
+        this.pausedByUser = true;
+        this.warn(`could not resume: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.resuming = false;
+        this.emit();
+      }
+    })();
   }
 
   /** Adopts a hand-painted blot into the film. */
@@ -535,16 +753,42 @@ export class InkStudio {
 
   // --------------------------------------------------------------- settings
 
+  /**
+   * Adopts the server capabilities once `/api/health` answers.
+   *
+   * `health` is fetched asynchronously while the studio is being constructed,
+   * so a value passed at construction would be the pre-flight `null` forever and
+   * the UI would keep claiming ffmpeg is missing on a machine that has it.
+   */
+  setHealth(health: HealthResponse | null): void {
+    this.options.health = health;
+    this.emit();
+  }
+
   updateSettings(patch: Partial<Settings>): void {
     const previousMood = this.options.settings.moodId;
     Object.assign(this.options.settings, patch);
     this.options.save(this.options.settings);
+    this.syncBudgetLimits();
     if (patch.stream?.autoChain !== undefined) this.chain.setAutoChain(patch.stream.autoChain);
     if (patch.moodId && patch.moodId !== previousMood && this.statusValue === 'live') {
       this.scheduler.notifyMoodChanged(moodById(previousMood));
       this.log('info', `mood turned to ${moodById(patch.moodId).label}`);
     }
     this.emit();
+  }
+
+  /** Pushes the live caps and orbit rates into the guard that enforces them. */
+  private syncBudgetLimits(): void {
+    const settings = this.options.settings;
+    this.budget.updateLimits({
+      sessionCapUsd: settings.budget.sessionCapUsd,
+      dailyCapUsd: settings.budget.dailyCapUsd,
+      sessionCapSeconds: settings.budget.sessionCapSeconds,
+      angleResolution: settings.camera.resolution,
+      angleSecondsPerTake: settings.camera.duration,
+      dryRun: settings.budget.dryRun,
+    });
   }
 
   /** Changes genre, source or score mode. A genre swap re-pins mid-stream. */
@@ -626,7 +870,16 @@ export class InkStudio {
   }): void {
     const settings = this.options.settings;
     const events: DirectorSessionEvents = {
-      onStatus: (status) => {
+      onStatus: (status, detail) => {
+        // a paused film just closed its session: its teardown must not drag the
+        // status along with it
+        if (this.pausedByUser) return;
+        if (status === 'failed') {
+          // the peer is gone: the session cannot continue, and everything it
+          // owns - the recording, the rail, the meter - has to be released
+          void this.failRun(detail ?? 'the transport failed');
+          return;
+        }
         if (status === 'ended' && this.statusValue !== 'stopping' && this.statusValue !== 'chaining') {
           this.setStatus('ended');
           return;
@@ -638,9 +891,9 @@ export class InkStudio {
           'server',
           `session: ${info.fps} fps, ${info.chunkSeconds}s chunks, ceiling ${info.maxSessionSeconds ?? 'undeclared'}`,
         );
-        if (info.maxSessionSeconds !== null && settings.stream.autoChain) {
-          this.warn(`this session ends at ${info.maxSessionSeconds}s; the film will hand over just before that`);
-        }
+        // the meter has to know the server's own ceiling, or an unattended run is
+        // cut off by the server instead of stopping itself in time
+        this.budget.updateLimits({ maxSessionSeconds: info.maxSessionSeconds ?? undefined });
         if (info.maxSessionSeconds !== null && !settings.stream.autoChain) {
           this.warn(`chaining is off, so the film will stop at ${info.maxSessionSeconds}s`);
         }
@@ -648,7 +901,9 @@ export class InkStudio {
       onConfigured: (info) => {
         this.log('server', `configured: ${info.resolution ?? '?'} ${info.aspectRatio ?? ''} memory ${info.memory ?? '?'}`);
         if (info.hasInitialImage === false) this.warn('the model did not accept the opening image');
-        if (info.hasInitialAudio === false && settings.music.mode === 'pinned') {
+        // only worth saying when a track was actually handed over: if hosting
+        // already failed the user has that warning, and the server never saw it
+        if (info.hasInitialAudio === false && this.pinned !== null) {
           this.warn('the pinned track was not accepted; this session will be scored by the model');
         }
       },
@@ -667,12 +922,28 @@ export class InkStudio {
       onAudioExhausted: () => this.warn('the pinned track ran out, so the rest of this session has no score'),
       onExhausted: (info) => {
         this.log('server', `stream ended: ${info.reason} after ${info.chunks} chunks`);
-        if (info.reason === 'session_limit') void this.handover('the server ended the session');
-        else void this.stop('the stream ended');
+        // 'stopped' is the server acknowledging a stop we already sent; saying
+        // "the stream ended" to someone who just pressed Stop is noise
+        if (this.statusValue === 'stopping' || this.statusValue === 'ended' || this.statusValue === 'failed') return;
+        if (info.reason === 'session_limit') {
+          if (settings.stream.autoChain) {
+            void this.handover('the server ended the session');
+          } else {
+            this.notify('warn', 'The server hit its session limit and chaining is off, so the film stops.');
+            void this.stop('the server reached its session limit');
+          }
+        } else {
+          this.notify('info', `The stream ended (${info.reason}); stopping.`);
+          void this.stop('the stream ended');
+        }
       },
       onError: (info) => {
         if (info.code === 'transport_error') this.error(`transport failed: ${info.message}`);
         else this.warn(`server error ${info.code}: ${info.message}`);
+        // the session classifies a code it cannot recover from; the run is over
+        // either way, so the teardown does not wait for the next heartbeat
+        const fatal = this.session?.fatalError;
+        if (fatal) void this.failRun(`${fatal.code}: ${fatal.message}`);
       },
       onUnknownMessage: (raw) => this.log('server', `unrecognised frame: ${String(raw.type)}`),
       onStream: (stream) => {
@@ -691,6 +962,10 @@ export class InkStudio {
     this.budget.beginSession();
     this.chain.recordStart();
     this.statusValue = 'connecting';
+    // the picture the session opens inside: the opening blot's own painting, or
+    // the frame a chain and a resume carry over from the last session
+    this.openingPoster = input.opening?.thumbDataUri ?? input.imageUrl ?? null;
+    this.applyPoster();
     session.start(buildConfigure({
       prompt: input.worldPrompt,
       imageUrl: input.imageUrl ?? undefined,
@@ -707,12 +982,18 @@ export class InkStudio {
 
   private handleChunk(chunk: ChunkInfo): void {
     this.lastChunk = chunk;
+    // the film has a picture of its own now: the opening still has done its job
+    if (chunk.chunkIndex === 0) {
+      this.openingPoster = null;
+      this.applyPoster();
+    }
     const verdict = this.budget.addChunk(chunk.requestedDurationSeconds);
     this.log(
       'server',
       `chunk ${chunk.chunkIndex} · ${chunk.requestedDurationSeconds}s · buffer ${chunk.bufferDepthSeconds.toFixed(1)}s · ${chunk.route}`,
     );
     if (!verdict.ok) {
+      this.notify('warn', `Session limit reached: ${verdict.detail}`);
       void this.stop(verdict.detail);
       return;
     }
@@ -738,16 +1019,42 @@ export class InkStudio {
     const handoff = chooseHandoffImage(settings.camera.handoff, lastFrameUrl, angleView);
     this.log('info', `the new session opens on ${handoff.used === 'turn' ? 'a different camera angle of the same world' : 'the last frame of the last one'}`);
     const pinnedUrl = this.pinned?.url ?? null;
+    // The next session arrives on a new MediaStream, and a MediaRecorder cannot
+    // be handed a different stream: it stops by itself when this one's tracks
+    // end, and a recorder left latched would silently swallow session N+1. So
+    // the part is closed here, before the session goes away, and the new stream
+    // opens the next one.
     this.budget.commitSession();
+    await this.finishRecording();
+    if (this.recordingResult) {
+      this.log('info', `recording kept: ${this.recordingResult.container}, ${Math.round(this.recordingResult.bytes / 1024)} KB`);
+    }
     const session = this.session;
     this.session = null;
     await session.stop();
+    // a pause that landed mid-handover wins: keep its frame and stay closed
+    if (this.pausedByUser) {
+      this.pausedFrameUrl = handoff.url;
+      this.budget.beginSession();
+      this.log('info', 'the pause interrupted a handover; the next session will open on this frame');
+      this.emit();
+      return;
+    }
+    // and so does a failure: opening the next session on a dead transport would
+    // spend a session minimum to generate nothing. `failing` is set before the
+    // teardown starts, so it is the honest signal here.
+    if (this.failing) {
+      this.budget.beginSession();
+      this.log('info', 'the handover was abandoned: the stream failed');
+      this.emit();
+      return;
+    }
     const mood = moodById(settings.moodId);
     const music = musicById(settings.music.musicId);
     const world = composeWorldPrompt({
       mood,
       music,
-      palette: settings.ink.palette.length > 0 ? settings.ink.palette : mood.palette,
+      palette: currentJob?.recipe.palette ?? [],
       moodStrength: settings.moodStrength,
       musicPinned: pinnedUrl !== null,
       scoreBrief: pinnedUrl ? undefined : generatedScoreBrief(music, mood.energy),
@@ -777,6 +1084,11 @@ export class InkStudio {
 
   private async beat(): Promise<void> {
     this.tickCount += 1;
+    // paused means paused: no dispatch, no chaining, and no paid rail work
+    if (this.statusValue === 'paused') {
+      this.emit();
+      return;
+    }
     if (this.tickCount % 2 === 0) {
       try {
         await this.rail.pump();
@@ -790,11 +1102,15 @@ export class InkStudio {
 
   private checkChain(): void {
     const session = this.session;
-    if (!session || (this.statusValue !== 'live' && this.statusValue !== 'paused')) return;
+    if (!session || this.statusValue !== 'live') return;
     if (session.fatalError) {
-      void this.stop(`${session.fatalError.code}: ${session.fatalError.message}`);
+      void this.failRun(`${session.fatalError.code}: ${session.fatalError.message}`);
       return;
     }
+    // A session that stops confirming directions - because it failed to generate
+    // a chunk, or the acknowledgement was lost - must not freeze the film. The
+    // scheduler cannot notice a chunk that never arrives, so it is checked here.
+    if (this.scheduler.checkDispatchTimeout()) this.scheduler.tick();
     const verdict = this.budget.checkBeforeSession();
     const decision = this.chain.decide({
       status: this.statusValue,
@@ -805,12 +1121,16 @@ export class InkStudio {
       budgetDetail: verdict.detail,
     });
     if (decision.action === 'chain') void this.handover(decision.reason);
-    else if (decision.action === 'stop') void this.stop(decision.reason);
+    else if (decision.action === 'stop') {
+      this.notify('warn', `Stopping: ${decision.reason}`);
+      void this.stop(decision.reason);
+    }
   }
 
-  private async waitForBlot(timeoutMs = 45_000): Promise<BlotJob | null> {
+  private async waitForBlot(timeoutMs = PREFLIGHT_WAIT_MS): Promise<BlotJob | null> {
     const deadline = this.now() + timeoutMs;
     while (this.now() < deadline) {
+      if (this.startCancelled) return null;
       const next = this.rail.next();
       if (next) return next;
       await this.sleep(250);
@@ -819,19 +1139,56 @@ export class InkStudio {
     return this.rail.next() ?? null;
   }
 
+  /**
+   * The pre-flight, as the overlay reads it.
+   *
+   * `pump()` awaits whole pipeline stages, so nothing else would repaint while a
+   * vision call or an orbit take is in flight. A timer therefore carries the
+   * updates, and the overlay is derived state rather than an event stream.
+   */
+  private preparingView(): (RailProgress & { elapsedMs: number }) | null {
+    if (this.statusValue !== 'preflight') return null;
+    return {
+      ...this.rail.progress,
+      elapsedMs: Math.max(0, this.now() - this.preflightStartedAt),
+    };
+  }
+
+  private beginPreflight(): void {
+    this.endPreflight();
+    this.preflightStartedAt = this.now();
+    this.preflightTicker = this.timer.set(() => this.emit(), PREFLIGHT_TICK_MS);
+    this.emit();
+  }
+
+  private endPreflight(): void {
+    if (this.preflightTicker === null) return;
+    this.timer.clear(this.preflightTicker);
+    this.preflightTicker = null;
+  }
+
   private setStatus(status: StudioStatus): void {
+    // a chained session must not drag a paused film back to life
+    if (status === 'live' && this.pausedByUser) status = 'paused';
     if (this.statusValue === status) return;
     this.statusValue = status;
     if (status === 'live') {
       this.startRecordingIfPossible();
       this.frameGrabber?.start();
       this.scheduler.tick();
+    } else if (status === 'ended' || status === 'failed' || status === 'idle') {
+      // the heartbeat is what keeps the rail full, and a rail that fills spends
+      // money on vision calls: a run that is over must stop doing either
+      this.stopHeartbeat();
     }
     this.emit();
   }
 
   private startRecordingIfPossible(): void {
     if (!this.stream || this.recorder.state !== 'idle') return;
+    // a stream left over from a closed session is inactive: recording it would
+    // produce nothing while blocking the real stream from being recorded
+    if (this.stream.active === false) return;
     try {
       const chosen = this.recorder.start(this.stream);
       this.log('info', `recording as ${chosen.mime}`);
@@ -843,7 +1200,21 @@ export class InkStudio {
   /** The element the film is played in. Set once by the shell at boot. */
   setVideoElement(video: HTMLVideoElement): void {
     this.videoElement = video;
+    this.applyPoster();
     if (this.stream) this.attachStream(this.stream, video);
+  }
+
+  /**
+   * Shows the session's opening picture until the model's first frame arrives.
+   *
+   * A Director session takes a while to produce its first chunk, and the player
+   * is a black rectangle until then - which reads as a broken film rather than
+   * one that is being painted. The image the session opens *inside* is the right
+   * thing to hold on screen: the first generated frame continues it.
+   */
+  private applyPoster(): void {
+    if (!this.videoElement) return;
+    this.videoElement.poster = this.openingPoster ?? '';
   }
 
   /** Called when the WebRTC receive stream arrives. */
@@ -851,12 +1222,20 @@ export class InkStudio {
     this.stream = stream;
     this.videoElement = video;
     video.srcObject = stream;
+    this.applyPoster();
     void video.play().catch(() => this.warn('playback was blocked; press play on the film once'));
+    if (this.pausedByUser) video.pause();
+    // a second stream (a chained session) replaces the first: two grabbers would
+    // both tick against the same element
+    this.frameGrabber?.dispose();
     this.frameGrabber = createFrameGrabber({
       video,
       onStatus: (message) => this.log('info', message),
       now: () => this.now(),
     });
+    // media can arrive before or after the session reports itself live, so the
+    // grabber is started from whichever of the two happens second
+    if (this.statusValue === 'live') this.frameGrabber.start();
     this.startRecordingIfPossible();
     this.options.onStream?.(stream);
   }
@@ -912,6 +1291,7 @@ export class InkStudio {
     };
     settings.budget = { ...settings.budget, sessionCapSeconds: shared.sessionCapSeconds };
     this.options.save(settings);
+    this.syncBudgetLimits();
     this.rail.reset();
     this.log('info', `loaded a shared run: ${shared.moodId} · ${shared.musicId} · blot #${shared.seed}`);
     this.emit();
@@ -928,6 +1308,11 @@ export class InkStudio {
     if (!this.warnings.includes(text)) this.warnings = [...this.warnings.slice(-9), text];
   }
 
+  /** Queues a one-shot message for the shell to show as a toast. */
+  private notify(kind: StudioAlert['kind'], text: string): void {
+    this.alerts = [...this.alerts.slice(-4), { id: (this.alertSeq += 1), kind, text }];
+  }
+
   private error(text: string): void {
     this.log('error', text);
   }
@@ -937,6 +1322,7 @@ export class InkStudio {
   }
 
   dispose(): void {
+    this.endPreflight();
     this.stopHeartbeat();
     this.frameGrabber?.dispose();
     this.recorder.reset();

@@ -169,6 +169,36 @@ describe('MusicBed', () => {
     expect(empty.uploaded).toHaveLength(0);
   });
 
+  it('refuses an HTML body the dev server served for a missing bundled track', async () => {
+    // `/assets/music/trance.mp3` with nothing in the folder answers with the
+    // app's index.html, and fal storage rejects `text/html` with a 500 that the
+    // client can only render as "Internal Server Error".
+    const missing = ports({
+      fetchTrack: async () => new Blob(['<!doctype html><html></html>'], { type: 'text/html' }),
+    });
+    const bed2 = new MusicBed(missing.ports);
+    await expect(bed2.resolve(config(), preset)).rejects.toThrow(/no bundled track at \/assets\/music\/trance\.mp3/);
+    await expect(bed2.resolve(config(), preset)).rejects.toThrow(/switch the score to generated/);
+    expect(missing.uploaded).toHaveLength(0);
+    expect(bed2.resolved).toBeNull();
+  });
+
+  it('refuses a custom url that answers with something other than audio', async () => {
+    const notAudio = ports({ fetchTrack: async () => new Blob(['<html>'], { type: 'text/html' }) });
+    const bed2 = new MusicBed(notAudio.ports);
+    await expect(bed2.resolve(config({ customUrl: 'https://example.com/track.mp3' }), preset))
+      .rejects.toThrow(/came back as text\/html, not audio/);
+    expect(notAudio.uploaded).toHaveLength(0);
+  });
+
+  it('still accepts a track the browser could only type as octet-stream', async () => {
+    const generic = ports({ fetchTrack: async () => new Blob([new Uint8Array(512)], { type: 'application/octet-stream' }) });
+    const bed2 = new MusicBed(generic.ports);
+    const track = await bed2.resolve(config(), preset);
+    expect(track!.url).toContain('trance-music-bed');
+    expect(generic.uploaded).toHaveLength(1);
+  });
+
   it('surfaces a fetch failure without caching it', async () => {
     const failing = ports({ fetchTrack: async () => { throw new MusicBedError('could not load the track (404)'); } });
     const bed2 = new MusicBed(failing.ports);

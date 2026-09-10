@@ -306,15 +306,20 @@ describe('DirectorSession', () => {
     expect(session2.status).toBe('ended');
   });
 
-  it('accumulates live wall-clock time', () => {
+  it('accumulates live wall-clock time, including the stretch still running', () => {
     let clock = 1000;
     const timed = new DirectorSession({ transport: t.transport, events: e.events, now: () => clock });
     timed.start(config());
+    expect(timed.liveMs).toBe(0); // never went live
     t.state('live');
     clock = 6000;
-    expect(timed.liveMs).toBe(0); // still live
+    // the chain controller reads this while the film is on air, so it has to
+    // grow live rather than only after a stop
+    expect(timed.liveMs).toBe(5000);
     void timed.stop();
     return Promise.resolve().then(() => {
+      clock = 60_000;
+      // stopping freezes the clock: the session is no longer live
       expect(timed.liveMs).toBe(5000);
     });
   });

@@ -26,6 +26,32 @@ export const INK_PALETTES: Record<string, string[]> = {
 
 export const PALETTE_IDS = Object.keys(INK_PALETTES) as Array<keyof typeof INK_PALETTES>;
 
+/**
+ * The full pigment range the engine may reach for. The studio no longer lets a
+ * palette be chosen by hand: every blot draws its own colours from here, so a
+ * film wanders through the whole range instead of sitting in one family.
+ */
+export const INK_COLOR_RANGE: readonly string[] = [
+  '#141821', '#1f2933', '#2b2b33', '#0f0f12', '#2d2d33', '#5a5a63',
+  '#3b2a1e', '#5a3d26', '#7a5b3a', '#6b4a12', '#9c7320', '#c9a154',
+  '#1b2a49', '#26406b', '#3d5a8a', '#101a3a', '#2c1a4a', '#452a70',
+  '#6a4a9c', '#8f7fd8', '#c3b6e8',
+  '#5b1d18', '#8c2f1f', '#c25a2a', '#e8a020', '#f46036',
+  '#123f38', '#1d6b52', '#3f9d7a', '#0d5c63', '#1b998b',
+  '#5c1f33', '#8e2f4a', '#c46a7d', '#2f4f4a', '#5d8580', '#a8c4bd',
+];
+
+/** Draws 2-4 distinct colours at random. Never returns an empty list. */
+export function randomInkPalette(rng: Rng, size?: number): string[] {
+  const pool = [...INK_COLOR_RANGE];
+  const count = Math.max(1, size ?? rng.int(2, 4));
+  const picked: string[] = [];
+  while (picked.length < count && pool.length > 0) {
+    picked.push(pool.splice(rng.int(0, pool.length - 1), 1)[0]!);
+  }
+  return picked;
+}
+
 export interface RecipeOptions {
   seed: number;
   canvas?: CanvasSpec;
@@ -147,7 +173,7 @@ export function inkRecipeFromSeed(options: RecipeOptions): InkRecipe {
     version: 1,
     seed: options.seed >>> 0,
     canvas: options.canvas ?? canvasForAspect('16:9'),
-    palette: options.palette && options.palette.length > 0 ? [...options.palette] : [...INK_PALETTES.ink!],
+    palette: options.palette && options.palette.length > 0 ? [...options.palette] : randomInkPalette(rng.fork()),
     tools,
     blotCount: options.blotCount ?? rng.int(3, 7),
     wetness: round(clamp01(options.wetness ?? rng.range(0.25, 0.8)), 3),
@@ -177,7 +203,6 @@ export function defaultInkRecipe(): InkRecipe {
   return inkRecipeFromSeed({
     seed: 20260908,
     canvas: canvasForAspect('16:9'),
-    palette: INK_PALETTES.ink,
     blotCount: 5,
     wetness: 0.55,
     bleed: 0.25,

@@ -1,0 +1,68 @@
+import { describe, it, expect } from 'vitest';
+import { renderPreparing } from './hud';
+import type { StudioView } from '../studio/studio';
+
+/** Enough of an element for the renderers: they only set `hidden` and `innerHTML`. */
+function root(): HTMLElement {
+  return { hidden: true, innerHTML: '' } as unknown as HTMLElement;
+}
+
+function view(preparing: StudioView['preparing']): StudioView {
+  return { preparing } as StudioView;
+}
+
+const progress = (
+  overrides: Partial<NonNullable<StudioView['preparing']>> = {},
+): NonNullable<StudioView['preparing']> => ({
+  target: 3,
+  ready: 0,
+  working: 3,
+  failed: 0,
+  anglesReady: 0,
+  anglesWanted: 0,
+  stage: 'painting',
+  elapsedMs: 5_000,
+  ...overrides,
+});
+
+describe('renderPreparing', () => {
+  it('hides itself once there is no pre-flight to report', () => {
+    const el = root();
+    renderPreparing(el, view(null));
+    expect(el.hidden).toBe(true);
+    expect(el.innerHTML).toBe('');
+  });
+
+  it('names the stage, the blots, the views and the clock', () => {
+    const el = root();
+    renderPreparing(el, view(progress({ stage: 'shooting', ready: 1, working: 2, anglesReady: 2, anglesWanted: 6, elapsedMs: 74_000 })));
+    expect(el.hidden).toBe(false);
+    expect(el.innerHTML).toContain('shooting the camera orbits');
+    expect(el.innerHTML).toContain('<strong>1</strong>/3 blots ready');
+    expect(el.innerHTML).toContain('views 2/6');
+    expect(el.innerHTML).toContain('width:33%');
+    expect(el.innerHTML).toContain('1m 14s');
+  });
+
+  it('drops the view counter and the orbit wording when no orbits are configured', () => {
+    const el = root();
+    renderPreparing(el, view(progress({ stage: 'imagining', failed: 1 })));
+    expect(el.innerHTML).toContain('asking the vision model what they could be');
+    expect(el.innerHTML).toContain('1 dropped');
+    expect(el.innerHTML).not.toContain('views');
+    expect(el.innerHTML).not.toContain('orbited');
+  });
+
+  it('never lets the bar or the view count run past its target', () => {
+    const el = root();
+    renderPreparing(el, view(progress({ ready: 4, anglesReady: 9, anglesWanted: 6 })));
+    expect(el.innerHTML).toContain('width:100%');
+    expect(el.innerHTML).toContain('views 6/6');
+  });
+
+  it('names a rail that dropped everything', () => {
+    const el = root();
+    renderPreparing(el, view(progress({ stage: 'stalled', working: 0, failed: 4 })));
+    expect(el.innerHTML).toContain('the rail is struggling');
+  });
+});

@@ -146,7 +146,7 @@ export function decodeShare(code: string, fallbackRecipe: InkRecipe): SharedSett
       memory: Math.round(asNumber(stream.memory, 12, 1, 50)),
       arrivalMode: asIn(stream.arrivalMode, ['hard', 'soft'] as const, 'hard'),
     },
-    sessionCapSeconds: Math.round(asNumber(parsed.sessionCapSeconds, 120, 60, 900)),
+    sessionCapSeconds: Math.round(asNumber(parsed.sessionCapSeconds, 120, 10, 900)),
   };
 }
 

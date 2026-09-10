@@ -75,8 +75,16 @@ export interface MusicConfig {
   volume: number; // 0-1, playback gain only
 }
 
+/** One of the three shipped quality/price presets. */
+export type QualityPreset = 'low' | 'medium' | 'high';
+
 export interface Settings {
-  version: 2;
+  version: 3;
+  /**
+   * Shorthand that fills the stream, camera and budget groups at once. Kept
+   * next to the values it set so the UI can say what the run is tuned for.
+   */
+  quality: QualityPreset;
   /** Vision model that imagines what each blot could be. */
   openrouterModel: string;
   /** Prompt for the manual-mode single-blot interpretation. */
@@ -218,26 +226,110 @@ export function clampNumber(value: number, min: number, max: number): number {
 export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.`;
 
 /** Asks the vision model for machine-readable direction, not prose. */
-export const DEFAULT_STUDIO_PROMPT = `You are the director of a single continuous, unbroken film that the viewer watches live. You are shown one abstract ink blot at a time. The blot is real: it is a genuine ink-and-fold painting, not a render.
+export const DEFAULT_STUDIO_PROMPT = `You are the director of a single continuous, unbroken film that the viewer watches live. You are shown one real ink-and-fold painting at a time, and you are the only one who gets to decide what is hiding in it.
 
-Read the blot's shapes, colours and negative space and decide what ONLY YOU can see in it. Then translate that into the next beat of the film.
+Look hard at the blot. Find the specific thing it already looks like - a figure, a place, a creature, a machine, a storm, a landscape - and commit to it. Then describe it VIVIDLY enough that a video model could film it without ever seeing the painting: name the subject, what it is made of, what it is doing, where the light comes from, and how the camera moves. Concrete nouns and real motion beat atmosphere every time.
 
 Rules:
 - One beat is a MOMENT, not a summary. Say what is happening now and what it becomes.
-- Keep the film's world, palette and camera language continuous with the beats before it. Never restart, never cut to a title, never address the viewer.
-- The closing frame of your beat must be able to land exactly on this blot, so describe the blot's own composition as the thing the moment resolves into.
-- Abstract and painterly is preferred. Never name a real person, a brand, or legible on-screen text.
-- Describe sound as part of the beat.
+- The beat must be filmable: a subject, an action, an environment, a camera move, a light source. Never just "ink spreads" or "colours bloom".
+- The film is already running. Keep its world, palette and camera language continuous with the beats before it. Never restart, never cut to a title, never address the viewer.
+- The incoming painting is a real frame of this film: your beat must resolve exactly into it, so describe the forms in the painting as the thing the moment turns into.
+- No real people, no brands, no legible on-screen text, no graphic violence. Strange and painterly is good; flat illustration is not.
 
 Reply with ONLY a JSON object, no markdown fence:
-{"subject": "<a few words naming what you see>", "prompt": "<40-90 words: the beat>", "transition": "<3-8 words: how the previous picture becomes this one>", "moodTags": ["<2-4 lowercase tags>"], "sound": "<8-20 words: the sound of this beat>"}`;
+{"subject": "<a few words naming what you see>", "prompt": "<60-110 words: the vivid, filmable beat>", "transition": "<3-8 words: how the previous picture becomes this one>", "moodTags": ["<2-4 lowercase tags>"], "sound": "<8-20 words: the sound of this beat>"}`;
 
 export const DEFAULT_BUDGET: BudgetConfig = {
-  sessionCapSeconds: 120,
-  sessionCapUsd: 5,
-  dailyCapUsd: 20,
+  sessionCapSeconds: 60,
+  sessionCapUsd: 1.5,
+  dailyCapUsd: 5,
   dryRun: false,
 };
+
+// ------------------------------------------------------------ quality presets
+
+/**
+ * A quality preset is a starting configuration, not a mode: picking one writes
+ * the values below and every slider stays editable afterwards.
+ *
+ * `low` is the default and the cheapest combination the app can run: 480p, no
+ * Multi Angle orbit takes (that meter is what makes a run expensive), and a
+ * single one-minute session - the shortest session the model bills for.
+ */
+export interface QualityPresetSpec {
+  id: QualityPreset;
+  label: string;
+  blurb: string;
+  stream: Pick<StreamConfig, 'resolution' | 'memory'>;
+  camera: Pick<CameraConfig, 'enabled' | 'anglesPerBlot' | 'resolution' | 'duration'>;
+  budget: Pick<BudgetConfig, 'sessionCapSeconds' | 'sessionCapUsd' | 'dailyCapUsd'>;
+}
+
+export const QUALITY_PRESETS: Record<QualityPreset, QualityPresetSpec> = {
+  low: {
+    id: 'low',
+    label: 'Low',
+    blurb: '480p, no orbit takes, one 60s session. The cheapest run.',
+    stream: { resolution: '480p', memory: 6 },
+    camera: { enabled: false, anglesPerBlot: 0, resolution: '480P', duration: 5 },
+    budget: { sessionCapSeconds: 60, sessionCapUsd: 1.5, dailyCapUsd: 5 },
+  },
+  medium: {
+    id: 'medium',
+    label: 'Medium',
+    blurb: '768p, two orbit takes per blot, a three-minute session.',
+    stream: { resolution: '768p', memory: 12 },
+    camera: { enabled: true, anglesPerBlot: 2, resolution: '480P', duration: 5 },
+    budget: { sessionCapSeconds: 180, sessionCapUsd: 6, dailyCapUsd: 20 },
+  },
+  high: {
+    id: 'high',
+    label: 'High',
+    blurb: '1080p, a four-angle orbit set, a ten-minute session.',
+    stream: { resolution: '1080p', memory: 24 },
+    camera: { enabled: true, anglesPerBlot: 4, resolution: '768P', duration: 8 },
+    budget: { sessionCapSeconds: 600, sessionCapUsd: 30, dailyCapUsd: 120 },
+  },
+};
+
+export const QUALITY_IDS = Object.keys(QUALITY_PRESETS) as QualityPreset[];
+export const DEFAULT_QUALITY: QualityPreset = 'low';
+
+export function isQualityPreset(value: unknown): value is QualityPreset {
+  return value === 'low' || value === 'medium' || value === 'high';
+}
+
+/**
+ * Returns a copy of `settings` with a preset's values written in. Pure, so the
+ * caller can hand the result straight to `updateSettings`.
+ */
+export function applyQualityPreset(settings: Settings, id: QualityPreset): Settings {
+  const preset = QUALITY_PRESETS[id] ?? QUALITY_PRESETS[DEFAULT_QUALITY];
+  const next = structuredClone(settings);
+  next.quality = preset.id;
+  Object.assign(next.stream, preset.stream);
+  Object.assign(next.camera, preset.camera);
+  Object.assign(next.budget, preset.budget);
+  return next;
+}
+
+/** True when the live values no longer match the selected preset. */
+export function qualityPresetDrifted(settings: Settings): boolean {
+  const preset = QUALITY_PRESETS[settings.quality] ?? QUALITY_PRESETS[DEFAULT_QUALITY];
+  const same = (a: unknown, b: unknown): boolean => a === b;
+  return !(
+    same(settings.stream.resolution, preset.stream.resolution)
+    && same(settings.stream.memory, preset.stream.memory)
+    && same(settings.camera.enabled, preset.camera.enabled)
+    && same(settings.camera.anglesPerBlot, preset.camera.anglesPerBlot)
+    && same(settings.camera.resolution, preset.camera.resolution)
+    && same(settings.camera.duration, preset.camera.duration)
+    && same(settings.budget.sessionCapSeconds, preset.budget.sessionCapSeconds)
+    && same(settings.budget.sessionCapUsd, preset.budget.sessionCapUsd)
+    && same(settings.budget.dailyCapUsd, preset.budget.dailyCapUsd)
+  );
+}
 
 const LS_KEY = 'ink-paper-studio-v2';
 const LS_KEY_V1 = 'ink-paper-settings-v1';
@@ -252,8 +344,9 @@ export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4.1-flash';
 const SUPERSEDED_OPENROUTER_MODELS = ['z-ai/glm-5.3-flash'];
 
 export function defaultSettings(): Settings {
-  return {
-    version: 2,
+  const base: Settings = {
+    version: 3,
+    quality: DEFAULT_QUALITY,
     openrouterModel: DEFAULT_OPENROUTER_MODEL,
     visionPrompt: DEFAULT_VISION_PROMPT,
     studioPrompt: DEFAULT_STUDIO_PROMPT,
@@ -261,7 +354,11 @@ export function defaultSettings(): Settings {
     moodStrength: 0.7,
     music: {
       musicId: DEFAULT_MUSIC_ID,
-      mode: 'pinned',
+      // `assets/music/` ships empty, so a fresh clone has nothing to pin: the
+      // default has to be the mode that works with no setup. Dropping a file in,
+      // pasting a URL, or switching to `pinned` all still condition the stream
+      // on a real track.
+      mode: 'generated',
       customUrl: null,
       resolvedUrl: null,
       volume: 0.6,
@@ -281,6 +378,7 @@ export function defaultSettings(): Settings {
     manualModeEnabled: true,
     proxyToken: '',
   };
+  return applyQualityPreset(base, DEFAULT_QUALITY);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -305,12 +403,13 @@ function merge(target: object, patch: unknown): void {
 export function mergeSettings(base: Settings, patch: unknown): Settings {
   const out = structuredClone(base);
   merge(out, patch);
-  out.version = 2;
+  out.version = 3;
+  if (!isQualityPreset(out.quality)) out.quality = DEFAULT_QUALITY;
   // runtime-only fields must never arrive from a stored or shared payload
   out.music.resolvedUrl = null;
   out.camera.anglesPerBlot = clampNumber(Math.round(out.camera.anglesPerBlot), 0, 4);
   out.stream.memory = clampNumber(Math.round(out.stream.memory), 1, 50);
-  out.budget.sessionCapSeconds = clampNumber(Math.round(out.budget.sessionCapSeconds), 60, 900);
+  out.budget.sessionCapSeconds = clampNumber(Math.round(out.budget.sessionCapSeconds), 10, 900);
   out.moodStrength = clampNumber(out.moodStrength, 0, 1);
   out.music.volume = clampNumber(out.music.volume, 0, 1);
   return out;
@@ -323,11 +422,17 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> | null = safeStor
   try {
     const raw = storage.getItem(LS_KEY);
     if (raw) {
-      const merged = mergeSettings(base, JSON.parse(raw));
+      const parsed: unknown = JSON.parse(raw);
+      const merged = mergeSettings(base, parsed);
       // Move a stored model that is merely an old built-in default onto the
       // current one; a model the user typed in is left alone.
       if (SUPERSEDED_OPENROUTER_MODELS.includes(merged.openrouterModel)) {
         merged.openrouterModel = DEFAULT_OPENROUTER_MODEL;
+      }
+      // a blob stored before presets existed has no deliberate quality choice,
+      // so the shipped default (cheapest) is applied over whatever was saved
+      if (!isQualityPreset(isPlainObject(parsed) ? parsed.quality : undefined)) {
+        return applyQualityPreset(merged, DEFAULT_QUALITY);
       }
       return merged;
     }

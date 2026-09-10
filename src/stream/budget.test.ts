@@ -114,6 +114,32 @@ describe('BudgetGuard', () => {
     expect(declared.effectiveSessionCapSeconds).toBe(60);
   });
 
+  it('honours a ceiling that arrives with the live session', () => {
+    // the server only declares its ceiling after the session opens, so it has to
+    // reach the guard that enforces it rather than being known and ignored
+    const guard2 = new BudgetGuard(limits({ sessionCapSeconds: 900, sessionCapUsd: 100 }), { now: () => PROMO, store });
+    expect(guard2.effectiveSessionCapSeconds).toBe(900);
+    guard2.updateLimits({ maxSessionSeconds: 120 });
+    expect(guard2.effectiveSessionCapSeconds).toBe(120);
+    guard2.addChunk(120);
+    expect(guard2.evaluate().reason).toBe('session-cap-seconds');
+    // the next session declares its own ceiling; the last one must not linger
+    guard2.beginSession();
+    expect(guard2.effectiveSessionCapSeconds).toBe(900);
+  });
+
+  it('re-reads the caps when they are edited after construction', () => {
+    const live = new BudgetGuard(limits({ sessionCapSeconds: 900, sessionCapUsd: 100 }), { now: () => PROMO, store });
+    live.addChunk(30);
+    expect(live.evaluate().ok).toBe(true);
+    // the user picks the low preset mid-run: the shorter cap must take hold
+    live.updateLimits({ sessionCapSeconds: 30 });
+    expect(live.effectiveSessionCapSeconds).toBe(30);
+    expect(live.evaluate().reason).toBe('session-cap-seconds');
+    live.updateLimits({ sessionCapSeconds: 900, sessionCapUsd: 0.5 });
+    expect(live.evaluate().reason).toBe('session-cap-usd');
+  });
+
   it('counts orbit takes on their own meter', () => {
     guard.addChunk(60);            // $1.20
     guard.addAngleTake();          // $0.0625

@@ -21,6 +21,11 @@ fal.realtime.open(wma('minimax/h3-max/director'), {
   `server/index.mjs` implements the documented `x-fal-target-url` contract and
   allowlists `wma.fal.run` for `POST /session`, `/ice` and `/session/heartbeat`
   only.
+* fal names its own failures in `detail` (a string, or the Pydantic array), but
+  the browser client only reads `message` and would otherwise show the bare HTTP
+  status text. The proxy rewrites a non-2xx JSON body into a legible `message`
+  (`legibleFalError`), which is why a storage refusal reads "Error initiating
+  upload" in the UI instead of "Internal Server Error".
 * `receive` has to name both kinds *before* the offer is created: a WebRTC answer
   cannot introduce a media section the browser did not offer.
 * The managed handle queues `send()` until the data channel is live, in order, so
@@ -112,6 +117,23 @@ daily caps, honours a ceiling the server declares, and stops the stream itself.
 
 File: `src/stream/budget.ts`, `src/stream/chain.ts`.
 
+## The pre-flight
+
+A run opens no session until the rail holds `preparedTarget` ready blots, which
+is a render, an upload, a vision call and (when the camera is on) two orbit takes
+per blot: one to two minutes of work with no picture to show for it.
+
+`BlotRail.progress` is derived rather than announced — the stage the
+least-finished live blot sits in, the blots ready against the target, the camera
+views done against those wanted. The studio polls it on a timer
+(`PREFLIGHT_TICK_MS`) because `rail.pump()` awaits whole stages and would
+otherwise leave the overlay frozen through a slow vision call. That snapshot is
+`view.preparing`, drawn over the stage by `renderPreparing`. A Stop during the
+pre-flight sets `startCancelled`, which unwinds `start()` before it can open a
+paying session.
+
+Files: `src/rail/queue.ts`, `src/studio/studio.ts`, `src/ui/hud.ts`.
+
 ## Chaining, end to end
 
 ```
@@ -128,7 +150,10 @@ session N live
                           (image_url = handoff, audio_url = same track)
 ```
 
-The recording is started once and spans the chain, so one run is one file.
+A `MediaRecorder` cannot be handed a second `MediaStream`, so session N's
+recording part is finalised as the seam is crossed and session N+1 opens the next
+one: a chained run exports one part per session. The same is true of a user pause,
+which ends the session as well.
 
 ## Alpha-API exposure
 

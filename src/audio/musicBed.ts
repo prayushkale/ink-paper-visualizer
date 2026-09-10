@@ -159,6 +159,7 @@ export class MusicBed {
       throw new MusicBedError('no track to pin: choose a genre with a bundled file, drop an audio file, or switch to the generated score');
     }
     if (blob.size === 0) throw new MusicBedError('that track is empty');
+    if (!isAudio(blob)) throw new MusicBedError(unusableTrackMessage(source, blob.type));
 
     const durationSeconds = await this.ports.probeDurationSeconds(blob);
     const limit = this.options.maxSourceSeconds ?? 600;
@@ -170,6 +171,33 @@ export class MusicBed {
     const url = await this.ports.upload(blob, `${preset.id}-music-bed.${extension}`);
     return { url, durationSeconds, bytes: blob.size, source };
   }
+}
+
+/**
+ * True when a blob is plausibly audio.
+ *
+ * An untyped blob is allowed through (the browser could not tell, and the
+ * extension is all we have), but anything the browser positively typed as
+ * something else is refused: fal storage rejects `text/html` outright, and the
+ * failure that produces is unreadable from here.
+ */
+function isAudio(blob: Blob): boolean {
+  const type = (blob.type || '').split(';')[0]!.trim().toLowerCase();
+  if (type === '') return true;
+  return type.startsWith('audio/') || type === 'application/octet-stream' || type === 'binary/octet-stream';
+}
+
+/**
+ * The dev server answers a request for a bundled track that does not exist with
+ * the app's index.html, so an empty `assets/music/` used to reach fal as an
+ * HTML upload. Name the real problem instead.
+ */
+function unusableTrackMessage(source: MusicSource, type: string): string {
+  const served = type.trim() === '' ? 'a file the browser could not identify' : type;
+  if (source.kind === 'bundled') {
+    return `no bundled track at ${source.url} - the server served ${served} instead. Drop one of the files listed in assets/music/README.md, paste a track URL, or switch the score to generated.`;
+  }
+  return `that track came back as ${served}, not audio`;
 }
 
 function extensionFor(contentType: string): string {

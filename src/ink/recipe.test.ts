@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  INK_COLOR_RANGE,
   INK_PALETTES,
   foldPlan,
   inkRecipeFromSeed,
+  randomInkPalette,
   recipeKey,
   renderOps,
   defaultInkRecipe,
@@ -115,6 +117,31 @@ describe('inkRecipeFromSeed', () => {
   it('falls back to the full tool set rather than an empty one', () => {
     const recipe = inkRecipeFromSeed({ seed: 1, tools: [] });
     expect(recipe.tools).toEqual([...INK_TOOLS]);
+  });
+
+  it('draws its own random colours when no palette is given', () => {
+    const recipe = inkRecipeFromSeed({ seed: 11 });
+    expect(recipe.palette.length).toBeGreaterThanOrEqual(2);
+    expect(recipe.palette.every((color) => INK_COLOR_RANGE.includes(color))).toBe(true);
+    // same seed, same colours
+    expect(recipe.palette).toEqual(inkRecipeFromSeed({ seed: 11 }).palette);
+    // different seeds wander through the range instead of sitting in one family
+    const palettes = new Set(
+      Array.from({ length: 20 }, (_, index) => inkRecipeFromSeed({ seed: 100 + index }).palette.join(',')),
+    );
+    expect(palettes.size).toBeGreaterThan(5);
+  });
+});
+
+describe('randomInkPalette', () => {
+  it('returns distinct colours drawn from the pigment range', () => {
+    for (let seed = 0; seed < 60; seed++) {
+      const palette = randomInkPalette(createRng(seed));
+      expect(palette.length).toBeGreaterThanOrEqual(2);
+      expect(palette.length).toBeLessThanOrEqual(4);
+      expect(new Set(palette).size).toBe(palette.length);
+      expect(palette.every((color) => INK_COLOR_RANGE.includes(color))).toBe(true);
+    }
   });
 });
 

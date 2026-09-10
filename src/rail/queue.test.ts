@@ -185,6 +185,37 @@ describe('BlotRail', () => {
     expect(rail.ready[0]!.url).toBeDefined();
   });
 
+  it('reports what the pre-flight is waiting on at every stage', async () => {
+    // a fresh rail is about to invent and paint
+    expect(rail.progress).toMatchObject({ target: 2, ready: 0, working: 0, failed: 0, stage: 'painting' });
+
+    // pump() advances every job one stage, so the label names the stage in flight
+    await rail.pump();
+    expect(rail.progress).toMatchObject({ working: 2, stage: 'hosting' });
+    await rail.pump();
+    expect(rail.progress).toMatchObject({ working: 2, stage: 'imagining' });
+    await rail.pump();
+    expect(rail.progress).toMatchObject({ working: 2, stage: 'shooting', anglesReady: 0, anglesWanted: 4 });
+
+    await settle(rail);
+    expect(rail.progress).toMatchObject({ ready: 2, working: 0, stage: 'ready', anglesReady: 4, anglesWanted: 4 });
+  });
+
+  it('counts no camera views when the camera is switched off', async () => {
+    h.cameraEnabled = false;
+    await settle(rail);
+    expect(rail.progress).toMatchObject({ anglesReady: 0, anglesWanted: 0, ready: 2, stage: 'ready' });
+  });
+
+  it('calls a rail that dropped everything stalled', async () => {
+    const failing = harness({ upload: async () => { throw new Error('storage down'); } });
+    const failingRail = new BlotRail(failing.ports, { ...DEFAULT_RAIL_OPTIONS, preparedTarget: 1 });
+    await settle(failingRail);
+    expect(failingRail.progress.stage).toBe('stalled');
+    expect(failingRail.progress.failed).toBeGreaterThan(0);
+    expect(failingRail.progress.working).toBe(0);
+  });
+
   it('drops a blot whose upload keeps failing and invents a replacement', async () => {
     let invented = 0;
     const failing = harness({

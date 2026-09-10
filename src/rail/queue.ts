@@ -89,6 +89,32 @@ export interface RailOptions {
   maxAttempts: number;
 }
 
+/**
+ * The stage the film is waiting on, named for what the rail is doing rather than
+ * for the state a blot happens to sit in.
+ */
+export type RailStage = 'painting' | 'hosting' | 'imagining' | 'shooting' | 'ready' | 'stalled';
+
+/**
+ * What the pre-flight is waiting for.
+ *
+ * A run opens no session until the rail holds `preparedTarget` ready blots, and
+ * that pipeline is slow - a render, an upload, a vision call and two orbit takes
+ * per blot. Derived on demand so the overlay can be refreshed on a timer without
+ * the rail having to announce anything.
+ */
+export interface RailProgress {
+  target: number;
+  ready: number;
+  /** Invented, painted, hosted or imagined - not finished, not dropped. */
+  working: number;
+  failed: number;
+  anglesReady: number;
+  anglesWanted: number;
+  /** The least-finished live blot: the one actually gating the start. */
+  stage: RailStage;
+}
+
 export const DEFAULT_RAIL_OPTIONS: RailOptions = {
   preparedTarget: 3,
   maxJobs: 8,
@@ -96,6 +122,18 @@ export const DEFAULT_RAIL_OPTIONS: RailOptions = {
   angleConcurrency: 2,
   maxAttempts: 2,
 };
+
+/** What each pre-session state means for the person waiting on it. */
+const STAGE_BY_STATE: Partial<Record<BlotState, RailStage>> = {
+  invented: 'painting',
+  rendered: 'hosting',
+  uploaded: 'imagining',
+  interpreted: 'shooting',
+  ready: 'ready',
+};
+
+/** Cheapest first, so the first state still in play is the gating one. */
+const STAGE_ORDER: BlotState[] = ['invented', 'rendered', 'uploaded', 'interpreted', 'ready'];
 
 /**
  * The blot rail. It invents blots, renders and uploads them, asks the vision
@@ -133,6 +171,30 @@ export class BlotRail {
 
   get failedCount(): number {
     return this.jobs.filter((job) => job.state === 'failed').length;
+  }
+
+  /**
+   * How far the pre-flight has got. Pure derived state: nothing to subscribe to,
+   * so the studio can poll it on a timer while `pump()` is mid-flight.
+   */
+  get progress(): RailProgress {
+    const camera = this.ports.readEpisode().camera;
+    const perBlot = camera.enabled ? Math.max(0, Math.min(4, camera.anglesPerBlot)) : 0;
+    const live = this.jobs.filter((job) => job.state !== 'passed' && job.state !== 'failed');
+    const gatingState = STAGE_ORDER.find((state) => live.some((job) => job.state === state));
+    return {
+      target: this.options.preparedTarget,
+      ready: live.filter((job) => job.state === 'ready').length,
+      working: live.filter((job) => job.state !== 'ready').length,
+      failed: this.failedCount,
+      anglesReady: live.reduce(
+        (sum, job) => sum + job.angles.filter((take) => take.state === 'ready').length,
+        0,
+      ),
+      anglesWanted: perBlot * live.length,
+      // nothing live and nothing dropped yet means the rail is about to invent
+      stage: gatingState ? STAGE_BY_STATE[gatingState]! : this.failedCount > 0 ? 'stalled' : 'painting',
+    };
   }
 
   find(id: string): BlotJob | undefined {

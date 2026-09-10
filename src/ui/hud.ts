@@ -11,12 +11,62 @@ const STATUS_COPY: Record<string, string> = {
   preflight: 'preparing',
   connecting: 'connecting',
   live: 'live',
-  paused: 'recording paused',
+  paused: 'paused',
   chaining: 'handing over',
   stopping: 'stopping',
   ended: 'finished',
   failed: 'failed',
 };
+
+const PREPARING_COPY: Record<string, string> = {
+  painting: 'painting the first blots',
+  hosting: 'hosting them where the model can fetch them',
+  imagining: 'asking the vision model what they could be',
+  shooting: 'shooting the camera orbits',
+  ready: 'opening the session',
+  stalled: 'the rail is struggling',
+};
+
+/**
+ * The pre-flight overlay.
+ *
+ * Nothing is generated until the rail holds enough ready blots, and that is a
+ * minute or two of work with no picture to show for it, so the stage, the count
+ * and the elapsed clock have to be visible or the app looks broken.
+ */
+export function renderPreparing(root: HTMLElement, view: StudioView): void {
+  const preparing = view.preparing;
+  if (!preparing) {
+    root.hidden = true;
+    root.innerHTML = '';
+    return;
+  }
+  const percent = preparing.target > 0
+    ? Math.min(100, Math.round((preparing.ready / preparing.target) * 100))
+    : 0;
+  const views = preparing.anglesWanted > 0
+    ? `<span>views ${Math.min(preparing.anglesReady, preparing.anglesWanted)}/${preparing.anglesWanted}</span>`
+    : '';
+  const dropped = preparing.failed > 0 ? `<span>${preparing.failed} dropped</span>` : '';
+  const orbited = preparing.anglesWanted > 0 ? ' and orbited' : '';
+  root.hidden = false;
+  root.innerHTML = `
+    <div class="preparing-card">
+      <p class="preparing-title">Preparing the film</p>
+      <p class="preparing-stage">${esc(PREPARING_COPY[preparing.stage] ?? preparing.stage)}…</p>
+      <div class="meter-bar"><div class="meter-fill" style="width:${percent}%"></div></div>
+      <p class="preparing-meta">
+        <span><strong>${preparing.ready}</strong>/${preparing.target} blots ready</span>
+        ${views}
+        ${dropped}
+        <span>${formatDuration(preparing.elapsedMs)}</span>
+      </p>
+      <p class="preparing-hint">
+        Every blot is painted, hosted and read by the vision model${orbited} before the
+        session can open on it. Nothing is billed until the film starts.
+      </p>
+    </div>`;
+}
 
 /** The status line: what the film is doing, and what it is costing. */
 export function renderStatusPill(root: HTMLElement, view: StudioView): void {
@@ -70,7 +120,10 @@ export function renderHud(root: HTMLElement, view: StudioView): void {
 export function renderTelemetry(root: HTMLElement, view: StudioView): void {
   const recording = view.recording;
   const remainingSeconds = view.spend.remainingSessionSeconds;
-  const result = recording.result;
+  // a paused session is finalised, so a run can be several files
+  const parts = recording.parts.length > 0
+    ? recording.parts
+    : recording.result ? [recording.result] : [];
   root.innerHTML = `
     <div class="grid-two">
       <div class="stat">
@@ -108,13 +161,14 @@ export function renderTelemetry(root: HTMLElement, view: StudioView): void {
         ${recording.container ? `<span class="chip">${esc(recording.container)}</span>` : ''}
         <span class="muted">${formatDuration(recording.durationMs)}</span>
       </div>
-      ${result
-        ? `<button class="primary" data-action="download">
-             Download ${result.remuxed ? 'mp4' : result.container}
-             <span class="muted">· ${Math.round(result.bytes / 1024)} KB</span>
-           </button>
-           ${view.capabilities.ffmpeg ? '' : '<p class="muted">ffmpeg was not found, so a webm cannot be converted to mp4 here.</p>'}`
-        : `<p class="muted">${recording.state === 'idle' ? 'nothing recorded yet' : 'the file appears here when you stop'}</p>`}
+      ${parts.length === 0
+        ? `<p class="muted">${recording.state === 'idle' ? 'nothing recorded yet' : 'the file appears here when you stop'}</p>`
+        : `${parts.map((part, index) => `
+             <button class="primary" data-action="download" data-index="${index}">
+               Download ${part.remuxed ? 'mp4' : part.container}${parts.length > 1 ? ` · part ${index + 1}` : ''}
+               <span class="muted">· ${Math.round(part.bytes / 1024)} KB</span>
+             </button>`).join('')}
+           ${view.capabilities.ffmpeg ? '' : '<p class="muted">ffmpeg was not found, so a webm cannot be converted to mp4 here.</p>'}`}
     </div>
 
     <details class="log-wrap" ${view.warnings.length > 0 ? 'open' : ''}>

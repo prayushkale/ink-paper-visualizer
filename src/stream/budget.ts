@@ -60,6 +60,11 @@ export interface BudgetLimits extends Pick<BudgetConfig, 'sessionCapUsd' | 'dail
   angleSecondsPerTake?: number;
   /** A demo run: nothing is spent and nothing is blocked. */
   dryRun?: boolean;
+  /**
+   * Ceiling the live session itself declared. Set when `session_info` arrives and
+   * cleared by `beginSession`, because the next session declares its own.
+   */
+  maxSessionSeconds?: number | null;
 }
 
 export interface BudgetOptions {
@@ -132,17 +137,28 @@ export class BudgetGuard {
 
   /** The hard wall for this session: the cap, or the server's own ceiling. */
   get effectiveSessionCapSeconds(): number {
-    const declared = this.options.maxSessionSeconds;
+    const declared = this.limits.maxSessionSeconds ?? this.options.maxSessionSeconds;
     if (typeof declared === 'number' && declared > 0) {
       return Math.min(this.limits.sessionCapSeconds, declared);
     }
     return this.limits.sessionCapSeconds;
   }
 
+  /**
+   * Re-reads the caps from settings. The guard is built once when the studio is
+   * created, but the sliders and the quality presets are edited long after, so
+   * the live values must be pushed in rather than snapshotted.
+   */
+  updateLimits(patch: Partial<BudgetLimits>): void {
+    Object.assign(this.limits, patch);
+  }
+
   /** Resets the per-session counters. Call before each new session in a chain. */
   beginSession(): void {
     this.sessionDirectorSecondsValue = 0;
     this.sessionAngleTakesValue = 0;
+    // the previous session's ceiling said nothing about this one
+    this.limits.maxSessionSeconds = undefined;
   }
 
   /** Records a generated chunk. This is the money clock. */
