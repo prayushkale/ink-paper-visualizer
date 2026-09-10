@@ -40,3 +40,41 @@ export const api = {
 export function proxiedVideoUrl(url: string): string {
   return `/api/proxy-video?url=${encodeURIComponent(url)}`;
 }
+
+/**
+ * Converts a browser recording into an mp4 using the local ffmpeg route.
+ * Only available when ffmpeg is installed; /api/health reports that.
+ */
+export async function remuxToMp4(blob: Blob): Promise<Blob> {
+  const response = await fetch('/api/remux', {
+    method: 'POST',
+    headers: { 'content-type': blob.type || 'video/webm' },
+    body: blob,
+  });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(detail?.error ?? `conversion failed (${response.status})`);
+  }
+  return response.blob();
+}
+
+/** Saves a blob to the user's downloads. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** `1m 04s` — used by the recording list and the session timer. */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+}

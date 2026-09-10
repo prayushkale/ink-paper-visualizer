@@ -1,4 +1,9 @@
 import 'dotenv/config';
+import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
+import { createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import express from 'express';
 
@@ -94,7 +99,42 @@ function singleHeader(value) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function createServer({ fetchImpl = fetch, env = process.env } = {}) {
+/** Is a usable ffmpeg on this machine? Reported by /api/health. */
+export function detectFfmpeg(spawnSyncImpl = nodeSpawnSync, binary = process.env.FFMPEG_PATH || 'ffmpeg') {
+  try {
+    const result = spawnSyncImpl(binary, ['-version'], { stdio: 'ignore' });
+    return result?.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ffmpeg arguments for turning a browser recording into an mp4 that a social
+ * platform will accept. Written to a temp file rather than stdout so the moov
+ * atom lands at the front (`+faststart`), which is what makes it seekable.
+ */
+export function buildRemuxArgs(input, output, { crf = 20, preset = 'veryfast', audioBitrate = '160k' } = {}) {
+  return [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-i', input,
+    '-c:v', 'libx264', '-preset', preset, '-crf', String(crf),
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', audioBitrate,
+    '-movflags', '+faststart',
+    output,
+  ];
+}
+
+const REMUX_LIMIT_BYTES = 2 * 1024 * 1024 * 1024;
+
+export function createServer({
+  fetchImpl = fetch,
+  env = process.env,
+  spawnImpl = nodeSpawn,
+  hasFfmpeg = detectFfmpeg(),
+  workDir = join(tmpdir(), 'ink-paper-remux'),
+} = {}) {
   const app = express();
   app.use(express.json({ limit: '20mb' }));
 
@@ -112,6 +152,7 @@ export function createServer({ fetchImpl = fetch, env = process.env } = {}) {
       multiAngle: true,
       proxyRoute: FAL_PROXY_ROUTE,
       authTokenRequired: !!PROXY_AUTH_TOKEN,
+      ffmpeg: !!hasFfmpeg,
     });
   });
 
@@ -247,7 +288,91 @@ export function createServer({ fetchImpl = fetch, env = process.env } = {}) {
     }
   });
 
+  // ------------------------------------------------------------- remux
+  // Browsers record webm; social platforms want mp4. Local-only by design,
+  // which is exactly why shelling out to ffmpeg here is acceptable.
+  app.post('/api/remux', (req, res) => {
+    if (!hasFfmpeg) {
+      return res.status(503).json({ error: 'ffmpeg is not available on this machine, so the recording cannot be converted' });
+    }
+    const declared = Number(req.headers['content-length'] ?? 0);
+    if (Number.isFinite(declared) && declared > REMUX_LIMIT_BYTES) {
+      return res.status(413).json({ error: 'recording is too large to convert' });
+    }
+    try {
+      mkdirSync(workDir, { recursive: true });
+    } catch (error) {
+      return res.status(500).json({ error: `could not prepare a working directory: ${error}` });
+    }
+    const input = join(workDir, `${randomUUID()}.webm`);
+    const output = join(workDir, `${randomUUID()}.mp4`);
+    const chunks = [];
+    let received = 0;
+    let aborted = false;
+    req.on('data', (chunk) => {
+      received += chunk.length;
+      if (received > REMUX_LIMIT_BYTES) {
+        aborted = true;
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', () => { aborted = true; });
+    req.on('end', () => {
+      if (aborted) {
+        if (!res.headersSent) res.status(413).json({ error: 'recording is too large to convert' });
+        return;
+      }
+      if (received === 0) {
+        if (!res.headersSent) res.status(400).json({ error: 'no recording received' });
+        return;
+      }
+      try {
+        writeFileSync(input, Buffer.concat(chunks));
+      } catch (error) {
+        return res.status(500).json({ error: `could not stage the recording: ${error}` });
+      }
+      const args = buildRemuxArgs(input, output);
+      let stderr = '';
+      const child = spawnImpl(env.FFMPEG_PATH || 'ffmpeg', args);
+      child.stderr?.on?.('data', (data) => { stderr += String(data); });
+      child.on('error', (error) => {
+        cleanup([input, output]);
+        if (!res.headersSent) res.status(500).json({ error: `could not run ffmpeg: ${error.message}` });
+      });
+      child.on('close', (code) => {
+        if (code !== 0 || !existsSync(output)) {
+          cleanup([input, output]);
+          if (!res.headersSent) {
+            res.status(500).json({ error: `ffmpeg failed (${code}): ${stderr.trim().slice(0, 500) || 'no output'}` });
+          }
+          return;
+        }
+        res.setHeader('content-type', 'video/mp4');
+        res.setHeader('content-disposition', 'attachment; filename="ink-film.mp4"');
+        const stream = createReadStream(output);
+        stream.on('error', () => {
+          cleanup([input, output]);
+          if (!res.headersSent) res.status(500).json({ error: 'could not read the converted file' });
+        });
+        stream.on('close', () => cleanup([input, output]));
+        stream.pipe(res);
+      });
+    });
+  });
+
   return app;
+}
+
+function cleanup(paths) {
+  for (const path of paths) {
+    try {
+      if (existsSync(path)) unlinkSync(path);
+    } catch {
+      /* nothing else to do about a leftover temp file */
+    }
+  }
 }
 
 /** Small helper reused by the server tests. */

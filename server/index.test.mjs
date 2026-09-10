@@ -1,13 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  buildRemuxArgs,
   createServer,
+  detectFfmpeg,
   isAllowedMediaUrl,
   isAllowedProxyTarget,
   matchesAny,
   DEFAULT_ALLOWED_ENDPOINTS,
   FAL_PROXY_ROUTE,
 } from './index.mjs';
+
+const HAS_FFMPEG = detectFfmpeg();
 
 const jsonRes = (body, status = 200) => ({
   ok: status < 300,
@@ -356,6 +365,153 @@ test('GET /api/proxy-video requires a url param', async () => {
   const app = withKeys(async () => streamRes(['x']));
   const res = await inject(app, 'GET', '/api/proxy-video');
   assert.equal(res.status, 400);
+});
+
+// ------------------------------------------------------------------ remux
+
+test('buildRemuxArgs produces a faststart h264/aac mp4', () => {
+  const args = buildRemuxArgs('/tmp/in.webm', '/tmp/out.mp4');
+  assert.ok(args.includes('-i'));
+  assert.equal(args[args.indexOf('-i') + 1], '/tmp/in.webm');
+  assert.ok(args.includes('libx264'));
+  assert.ok(args.includes('aac'));
+  assert.ok(args.includes('yuv420p'));
+  assert.ok(args.includes('+faststart'));
+  assert.equal(args[args.length - 1], '/tmp/out.mp4');
+});
+
+test('POST /api/remux refuses to run when ffmpeg is missing', async () => {
+  const app = createServer({
+    fetchImpl: async () => jsonRes({}),
+    env: { FAL_KEY: 'k' },
+    hasFfmpeg: false,
+  });
+  const res = await inject(app, 'POST', '/api/remux', { some: 'webm' });
+  assert.equal(res.status, 503);
+  assert.match(res.body.error, /ffmpeg is not available/);
+});
+
+test('POST /api/remux rejects an empty recording', async () => {
+  const app = createServer({ fetchImpl: async () => jsonRes({}), env: { FAL_KEY: 'k' }, hasFfmpeg: true });
+  const server = app.listen(0);
+  const port = server.address().port;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/remux`, {
+      method: 'POST',
+      headers: { 'content-type': 'video/webm' },
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /no recording received/);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/remux reports an ffmpeg failure rather than hanging', async () => {
+  const spawnImpl = () => {
+    const child = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setTimeout(() => {
+      child.stderr.emit('data', 'Invalid data found when processing input');
+      child.emit('close', 1);
+    }, 1);
+    return child;
+  };
+  const app = createServer({
+    fetchImpl: async () => jsonRes({}),
+    env: { FAL_KEY: 'k' },
+    hasFfmpeg: true,
+    spawnImpl,
+    workDir: mkdtempSync(join(tmpdir(), 'ink-remux-test-')),
+  });
+  const res = await inject(app, 'POST', '/api/remux', { fake: true }, { 'content-type': 'video/webm' });
+  assert.equal(res.status, 500);
+  assert.match(res.body.error, /ffmpeg failed \(1\)/);
+  assert.match(res.body.error, /Invalid data/);
+});
+
+test('POST /api/remux streams back the converted file', async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'ink-remux-ok-'));
+  const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom', 'ascii')]);
+  const spawnImpl = (_binary, args) => {
+    const child = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const output = args[args.length - 1];
+    setTimeout(() => {
+      writeFileSync(output, mp4);
+      child.emit('close', 0);
+    }, 1);
+    return child;
+  };
+  const app = createServer({
+    fetchImpl: async () => jsonRes({}),
+    env: { FAL_KEY: 'k' },
+    hasFfmpeg: true,
+    spawnImpl,
+    workDir,
+  });
+  const server = app.listen(0);
+  const port = server.address().port;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/remux`, {
+      method: 'POST',
+      headers: { 'content-type': 'video/webm' },
+      body: Buffer.from('fake webm bytes'),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'video/mp4');
+    assert.match(response.headers.get('content-disposition') ?? '', /ink-film\.mp4/);
+    const body = Buffer.from(await response.arrayBuffer());
+    assert.equal(body.length, mp4.length);
+    assert.equal(body.subarray(4, 12).toString('ascii'), 'ftypisom');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/remux really converts a webm when ffmpeg is present', { skip: !HAS_FFMPEG }, async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'ink-remux-real-'));
+  const source = join(workDir, 'source.webm');
+  await new Promise((resolve, reject) => {
+    const ff = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc=size=128x72:rate=12:duration=1',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+      '-c:v', 'libvpx', '-c:a', 'libopus', source,
+    ]);
+    ff.on('error', reject);
+    ff.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`fixture ffmpeg exited ${code}`))));
+  });
+  const app = createServer({
+    fetchImpl: async () => jsonRes({}),
+    env: { FAL_KEY: 'k' },
+    hasFfmpeg: true,
+    workDir,
+  });
+  const server = app.listen(0);
+  const port = server.address().port;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/remux`, {
+      method: 'POST',
+      headers: { 'content-type': 'video/webm' },
+      body: readFileSync(source),
+    });
+    assert.equal(response.status, 200);
+    const body = Buffer.from(await response.arrayBuffer());
+    assert.ok(body.length > 0, 'converted file is empty');
+    assert.equal(body.subarray(4, 8).toString('ascii'), 'ftyp', 'output is not an mp4');
+    const produced = join(workDir, 'verify.mp4');
+    writeFileSync(produced, body);
+    const hasVideo = await new Promise((resolve) => {
+      const probe = spawn('ffmpeg', ['-hide_banner', '-i', produced, '-f', 'null', '-']);
+      let log = '';
+      probe.stderr.on('data', (data) => { log += String(data); });
+      probe.on('close', (code) => resolve(code === 0 && /Video: h264/.test(log)));
+    });
+    assert.ok(hasVideo, 'converted file has no h264 video stream');
+  } finally {
+    server.close();
+  }
 });
 
 // --------------------------------------------------------- removed surfaces
