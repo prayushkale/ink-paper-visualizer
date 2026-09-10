@@ -12,6 +12,7 @@ import {
   isAllowedMediaUrl,
   isAllowedProxyTarget,
   matchesAny,
+  upstreamErrorDetail,
   DEFAULT_ALLOWED_ENDPOINTS,
   FAL_PROXY_ROUTE,
 } from './index.mjs';
@@ -146,6 +147,86 @@ test('POST /api/interpret does not retry non-transient openrouter 200-errors', a
   assert.match(res.body.error, /Model blocked by guardrail/);
   assert.equal(res.body.attempts, 1);
   assert.equal(calls, 1);
+});
+
+test('POST /api/interpret retries a transient HTTP status from openrouter', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    if (calls === 1) return jsonRes({ error: { message: 'Provider returned error' } }, 502);
+    return jsonRes({ choices: [{ message: { content: 'Recovered.' } }] });
+  }, { VISION_RETRY_DELAY_MS: '0' });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.text, 'Recovered.');
+  assert.equal(calls, 2);
+});
+
+test('POST /api/interpret gives up on a persistent 5xx and reports the attempts', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    return jsonRes({ error: { message: 'Provider returned error' } }, 503);
+  }, { VISION_RETRY_DELAY_MS: '0' });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 503);
+  assert.match(res.body.error, /Provider returned error/);
+  assert.equal(res.body.attempts, 3);
+  assert.equal(calls, 3);
+});
+
+test('POST /api/interpret passes a non-retryable HTTP status straight through', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    return jsonRes({ error: { message: 'No auth credentials found' } }, 401);
+  });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 401);
+  assert.match(res.body.error, /No auth credentials found/);
+  assert.equal(calls, 1);
+});
+
+test('upstreamErrorDetail unwraps the provider complaint openrouter hides', () => {
+  assert.equal(
+    upstreamErrorDetail({
+      message: 'Provider returned error',
+      code: 400,
+      metadata: { raw: '{"error":{"message":"unsupported image"}}' },
+    }),
+    'unsupported image',
+  );
+  assert.equal(upstreamErrorDetail({ message: 'no metadata here' }), null);
+  assert.equal(upstreamErrorDetail({ metadata: { raw: 'not json' } }), 'not json');
+});
+
+test('POST /api/interpret surfaces the real provider complaint', async () => {
+  let calls = 0;
+  const app = withKeys(async () => {
+    calls++;
+    return jsonRes({
+      error: {
+        message: 'Provider returned error',
+        code: 400,
+        metadata: { raw: '{"error":{"message":"You have uploaded an unsupported image"}}' },
+      },
+    }, 400);
+  }, { VISION_RETRY_DELAY_MS: '0' });
+  const res = await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /Provider returned error: You have uploaded an unsupported image/);
+  // an unsupported image is not a hiccup: it must not be replayed
+  assert.equal(calls, 1);
+});
+
+test('POST /api/interpret defaults to the deepseek vision model', async () => {
+  const calls = [];
+  const app = withKeys(async (url, opts = {}) => {
+    calls.push(JSON.parse(opts.body ?? '{}'));
+    return jsonRes({ choices: [{ message: { content: 'ok' } }] });
+  });
+  await inject(app, 'POST', '/api/interpret', { image: 'data:image/png;base64,AAA' });
+  assert.equal(calls[0].model, 'deepseek/deepseek-v4.1-flash');
 });
 
 // ------------------------------------------------------------------- health

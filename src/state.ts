@@ -242,10 +242,19 @@ export const DEFAULT_BUDGET: BudgetConfig = {
 const LS_KEY = 'ink-paper-studio-v2';
 const LS_KEY_V1 = 'ink-paper-settings-v1';
 
+/** The vision model shipped by default. */
+export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4.1-flash';
+
+/**
+ * Defaults this app used to ship. A stored value that matches one of these was
+ * never a deliberate choice, so it is migrated forward rather than honoured.
+ */
+const SUPERSEDED_OPENROUTER_MODELS = ['z-ai/glm-5.3-flash'];
+
 export function defaultSettings(): Settings {
   return {
     version: 2,
-    openrouterModel: 'z-ai/glm-5.3-flash',
+    openrouterModel: DEFAULT_OPENROUTER_MODEL,
     visionPrompt: DEFAULT_VISION_PROMPT,
     studioPrompt: DEFAULT_STUDIO_PROMPT,
     moodId: DEFAULT_MOOD_ID,
@@ -313,11 +322,22 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> | null = safeStor
   if (!storage) return base;
   try {
     const raw = storage.getItem(LS_KEY);
-    if (raw) return mergeSettings(base, JSON.parse(raw));
+    if (raw) {
+      const merged = mergeSettings(base, JSON.parse(raw));
+      // Move a stored model that is merely an old built-in default onto the
+      // current one; a model the user typed in is left alone.
+      if (SUPERSEDED_OPENROUTER_MODELS.includes(merged.openrouterModel)) {
+        merged.openrouterModel = DEFAULT_OPENROUTER_MODEL;
+      }
+      return merged;
+    }
     const legacy = storage.getItem(LS_KEY_V1);
     if (legacy) {
       const old = JSON.parse(legacy) as { openrouterModel?: string; visionPrompt?: string };
       if (typeof old.openrouterModel === 'string') base.openrouterModel = old.openrouterModel;
+      if (SUPERSEDED_OPENROUTER_MODELS.includes(base.openrouterModel)) {
+        base.openrouterModel = DEFAULT_OPENROUTER_MODEL;
+      }
       if (typeof old.visionPrompt === 'string') base.visionPrompt = old.visionPrompt;
     }
   } catch {

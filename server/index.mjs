@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,17 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import express from 'express';
+
+/**
+ * `.env` is the single source of truth for this app's credentials.
+ *
+ * `dotenv` does not overwrite variables that are already set, and a stale
+ * `export FAL_KEY=...` / `export OPENROUTER_API_KEY=...` in a shell rc file
+ * would otherwise silently shadow `.env` (which is what makes the app look
+ * like it is ignoring the key you just edited). `override: true` makes the
+ * file win, so what you see in `.env` is what the server uses.
+ */
+dotenv.config({ override: true });
 
 /** The fal server-proxy contract header carrying the real upstream URL. */
 export const TARGET_URL_HEADER = 'x-fal-target-url';
@@ -128,6 +139,27 @@ export function buildRemuxArgs(input, output, { crf = 20, preset = 'veryfast', a
 
 const REMUX_LIMIT_BYTES = 2 * 1024 * 1024 * 1024;
 
+/**
+ * Pull the real complaint out of an OpenRouter error.
+ *
+ * When an upstream provider rejects a request OpenRouter collapses everything
+ * to `{"message":"Provider returned error","code":400}` and buries the useful
+ * sentence in `error.metadata.raw` as a JSON string. Without this a bad image
+ * or a model the provider will not serve is invisible in the UI.
+ */
+export function upstreamErrorDetail(bodyError) {
+  const raw = bodyError?.metadata?.raw;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const inner = parsed?.error?.message ?? parsed?.message ?? parsed?.detail;
+    if (typeof inner === 'string' && inner.trim() !== '') return inner.trim();
+    return null;
+  } catch {
+    return raw.trim().slice(0, 300);
+  }
+}
+
 export function createServer({
   fetchImpl = fetch,
   env = process.env,
@@ -157,8 +189,9 @@ export function createServer({
   });
 
   // ------------------------------------------------- vision interpretation
-  // OpenRouter (OpenAI-compatible multimodal). Retries the transient failures
-  // OpenRouter reports as HTTP 200 with an error object inside.
+  // OpenRouter (OpenAI-compatible multimodal). A struggling upstream provider
+  // reports itself two different ways — a non-2xx status, or an error object
+  // inside an HTTP 200 — so both are retried on the same terms.
   app.post('/api/interpret', async (req, res) => {
     if (!OPENROUTER_KEY) return res.status(500).json({ error: 'OPENROUTER_API_KEY missing in server .env' });
     const { image, model, visionPrompt } = req.body ?? {};
@@ -167,7 +200,7 @@ export function createServer({
     }
     try {
       const orBody = JSON.stringify({
-        model: model || 'google/gemini-2.5-flash',
+        model: model || 'deepseek/deepseek-v4.1-flash',
         messages: [
           {
             role: 'user',
@@ -179,6 +212,14 @@ export function createServer({
         ],
       });
       const MAX_ATTEMPTS = 3;
+      const RETRY_DELAY_MS = Number(env.VISION_RETRY_DELAY_MS ?? 250);
+      /** `true` when the failure is an upstream hiccup worth another roll. */
+      const isTransient = (status, message, code) => {
+        if (status === 408 || status === 429 || status >= 500) return true;
+        if (code === 408 || code === 429 || code === 502 || code === 503 || code === 504) return true;
+        return /abort|timeout|timed out|overloaded|rate limit|provider returned error|temporarily unavailable/i
+          .test(String(message ?? ''));
+      };
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const r = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
@@ -189,19 +230,23 @@ export function createServer({
           body: orBody,
         });
         const data = await r.json();
-        if (!r.ok) return res.status(r.status).json({ error: data?.error?.message ?? 'openrouter error' });
-        if (data?.error) {
-          const code = Number(data.error.code ?? 0);
-          const transient = code === 408 || code === 429 || code === 502 || code === 503 || code === 504 ||
-            /abort|timeout|timed out|overloaded|rate limit/i.test(String(data.error.message ?? ''));
-          if (!transient || attempt === MAX_ATTEMPTS) {
-            return res.status(502).json({
-              error: `openrouter error: ${data.error.message ?? 'unknown'}`,
-              code: data.error.code ?? null,
-              attempts: attempt,
-            });
+        const bodyError = data?.error;
+        if (!r.ok || bodyError) {
+          const base = String(bodyError?.message ?? `openrouter error (${r.status})`);
+          const detail = upstreamErrorDetail(bodyError);
+          const code = bodyError?.code ?? null;
+          // Judge transience on the most specific text available: OpenRouter
+          // wraps genuine provider complaints behind a generic message.
+          if (attempt < MAX_ATTEMPTS && isTransient(r.status, detail ?? base, code)) {
+            // brief backoff: an immediately-retried provider usually fails again
+            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
+            continue;
           }
-          continue;
+          const message = detail && !base.includes(detail) ? `${base}: ${detail}` : base;
+          // in-body errors keep their original 502 + prefixed shape; a real HTTP
+          // status is passed through so 401/400 are not disguised as a gateway fault
+          if (r.ok) return res.status(502).json({ error: `openrouter error: ${message}`, code, attempts: attempt });
+          return res.status(r.status).json({ error: message, code, attempts: attempt });
         }
         const msg = data.choices?.[0]?.message ?? {};
         const text = msg.content ?? msg.reasoning ?? '';

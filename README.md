@@ -44,6 +44,11 @@ Optional: `PROXY_AUTH_TOKEN` makes the browser echo a token on every proxied
 call (set `HOST=0.0.0.0` only if you know why — the proxy holds your fal key and
 binds to loopback by default).
 
+`.env` is the single source of truth for these keys. The server loads it with
+`override: true`, so a stale `export FAL_KEY=...` in `~/.zshrc` or `~/.bashrc`
+cannot shadow what you put in the file. If you see `credential has been revoked`
+from fal, the key itself was revoked in the fal dashboard — generate a new one.
+
 ---
 
 ## Cost, honestly

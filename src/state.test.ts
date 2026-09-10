@@ -252,6 +252,24 @@ describe('loadSettings / saveSettings', () => {
     expect(loadSettings(storage)).toEqual(defaultSettings());
   });
 
+  it('ships the deepseek vision model by default', () => {
+    expect(defaultSettings().openrouterModel).toBe('deepseek/deepseek-v4.1-flash');
+  });
+
+  it('migrates a stored superseded default model onto the current one', () => {
+    const storage = memoryStorage({
+      'ink-paper-studio-v2': JSON.stringify({ openrouterModel: 'z-ai/glm-5.3-flash' }),
+    });
+    expect(loadSettings(storage).openrouterModel).toBe('deepseek/deepseek-v4.1-flash');
+  });
+
+  it('keeps a vision model the user deliberately typed in', () => {
+    const storage = memoryStorage({
+      'ink-paper-studio-v2': JSON.stringify({ openrouterModel: 'anthropic/claude-4.6-sonnet' }),
+    });
+    expect(loadSettings(storage).openrouterModel).toBe('anthropic/claude-4.6-sonnet');
+  });
+
   it('survives storage that throws', () => {
     const hostile = {
       getItem: () => { throw new Error('blocked'); },
