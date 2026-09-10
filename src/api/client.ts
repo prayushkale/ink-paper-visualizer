@@ -5,6 +5,8 @@ export interface HealthResponse {
   multiAngle: boolean;
   proxyRoute: string;
   authTokenRequired: boolean;
+  /** Whether this machine can convert a recording to mp4. */
+  ffmpeg: boolean;
 }
 
 export interface InterpretRequest {

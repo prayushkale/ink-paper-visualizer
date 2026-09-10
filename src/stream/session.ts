@@ -37,6 +37,8 @@ export interface DirectorSessionEvents {
   onAudioRejected?(info: { reason: string; error: string }): void;
   onAudioExhausted?(info: { chunkIndex: number; silentSeconds: number }): void;
   onExhausted?(info: { reason: string; chunks: number }): void;
+  /** The WebRTC receive stream. The film's picture and sound. */
+  onStream?(stream: MediaStream): void;
   onError?(info: { code: StudioErrorCode; message: string }): void;
   onUnknownMessage?(raw: Record<string, unknown>): void;
 }
@@ -124,6 +126,7 @@ export class DirectorSession {
       onData: (raw) => this.handleData(raw),
       onState: (state) => this.handleState(state),
       onError: (error) => this.handleTransportError(error),
+      onMedia: (stream) => this.events.onStream?.(stream),
     });
     this.configured = configure;
     this.setStatus('connecting');

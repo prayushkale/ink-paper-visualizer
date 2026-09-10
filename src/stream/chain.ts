@@ -111,7 +111,7 @@ export class ChainController {
   private failuresValue = 0;
   private consecutiveFailuresValue = 0;
 
-  constructor(private readonly options: ChainControllerOptions) {}
+  constructor(private options: ChainControllerOptions) {}
 
   get sessionCount(): number {
     return this.sessionCountValue;
@@ -131,6 +131,11 @@ export class ChainController {
 
   get autoChain(): boolean {
     return this.options.autoChain;
+  }
+
+  /** Chaining can be switched off mid-run from the UI. */
+  setAutoChain(value: boolean): void {
+    this.options.autoChain = value;
   }
 
   get safetySeconds(): number {

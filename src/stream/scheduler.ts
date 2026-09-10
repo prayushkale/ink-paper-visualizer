@@ -336,6 +336,30 @@ export class BlotScheduler {
     });
   }
 
+  /**
+   * Adopts the blot that already opened the session.
+   *
+   * Its own image is the session's first frame, so the film starts *inside*
+   * that blot and the first thing to arrive is a view of it from elsewhere.
+   */
+  beginWith(blot: BlotJob): void {
+    this.held = blot;
+    this.cursor = 1;
+    this.cycles = 0;
+    this.retired.delete(blot.id);
+    this.options.rail.markLive(blot.id);
+  }
+
+  /** Moves on from the current blot immediately, at the next opportunity. */
+  releaseCurrent(): void {
+    const blot = this.held;
+    if (!blot) return;
+    this.cursor = this.destinationsFor(blot).length;
+    this.cycles = this.maxAngleCycles;
+    this.retire(blot.id);
+    this.tick();
+  }
+
   reset(): void {
     this.cursor = 0;
     this.cycles = 0;
