@@ -14,6 +14,8 @@ export interface ManualContext {
   settings: Settings;
   dropOptions: DropOptions;
   save(): void;
+  /** The brush is UI state, not a run setting, so it persists on its own. */
+  onBrushChanged(drop: DropOptions): void;
   /** Hands the finished blot to the film. */
   onHandoff(blob: Blob, thumbDataUri: string, recipe: InkRecipe): void;
   onExit(): void;
@@ -94,9 +96,18 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
       const wet = ctx.container.querySelector('#wetness')!.parentElement!.querySelector('.muted');
       if (wet) wet.textContent = ctx.dropOptions.wetness.toFixed(2);
     };
-    ctx.container.querySelector('#inkColor')!.addEventListener('input', update);
-    ctx.container.querySelector('#dropSize')!.addEventListener('input', update);
-    ctx.container.querySelector('#wetness')!.addEventListener('input', update);
+    // `input` keeps the readout and the live brush in step; `change` is what a
+    // range or colour picker fires when the gesture ends, so that is where the
+    // brush is written down - a drag must not store a payload per pixel.
+    const commit = (): void => {
+      update();
+      ctx.onBrushChanged({ ...ctx.dropOptions });
+    };
+    for (const id of ['#inkColor', '#dropSize', '#wetness']) {
+      const input = ctx.container.querySelector(id)!;
+      input.addEventListener('input', update);
+      input.addEventListener('change', commit);
+    }
 
     const renderFolds = (): void => {
       const list = ctx.container.querySelector('#foldList')!;

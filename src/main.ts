@@ -16,21 +16,34 @@ import { InkStudio } from './studio/studio';
 import { createRuntimePorts } from './studio/ports';
 import { setProxyToken } from './fal';
 import { StudioShell, type ShellElements } from './ui/shell';
+import { createPrefsStore } from './ui/prefs';
+import { applyTheme } from './ui/theme';
 import { mountManual } from './ui/manual';
 import type { Paper } from './ink/paper';
 import type { InkScene } from './three/scene';
 
 const settings: Settings = loadSettings();
+/**
+ * What the page remembers about itself: the view you were in, the brush, the
+ * mute button, spectator mode. Run settings are separate (see `loadSettings`),
+ * because those are worth sharing and these are not.
+ */
+const prefs = createPrefsStore();
+// index.html already set this before the first paint; putting it back through
+// the module makes the store the authority rather than the copy in the shell
+applyTheme(prefs.state().theme);
 // the proxy only requires this when the server sets PROXY_AUTH_TOKEN
 setProxyToken(settings.proxyToken || null);
 let health: HealthResponse | null = null;
 let mode: 'studio' | 'manual' = 'studio';
 
+const storedBrush = prefs.state().brush;
 const dropOptions: DropOptions = {
-  radius: 40,
-  // the manual brush opens on a random pigment; the colour can still be changed
-  color: INK_COLOR_RANGE[Math.floor(Math.random() * INK_COLOR_RANGE.length)] ?? '#141821',
-  wetness: 0.5,
+  radius: storedBrush.radius,
+  // the brush opens on the pigment it was left on; a first visit has none, so
+  // it picks one at random (the colour can still be changed)
+  color: storedBrush.color || INK_COLOR_RANGE[Math.floor(Math.random() * INK_COLOR_RANGE.length)] || '#141821',
+  wetness: storedBrush.wetness,
 };
 
 // ------------------------------------------------------------- lazy paper
@@ -82,8 +95,9 @@ const studio = new InkStudio({
 
 studio.setVideoElement(player);
 // the stream carries native audio, and by the time anything arrives the user
-// has already pressed Start, so playback is permitted: do not start muted
-player.muted = false;
+// has already pressed Start, so playback is permitted: a fresh visit starts
+// unmuted, and a later one starts the way the mute button was left
+player.muted = prefs.state().muted;
 player.volume = settings.music.volume;
 
 const elements: ShellElements = {
@@ -104,6 +118,9 @@ let manual: ReturnType<typeof mountManual> | null = null;
 
 function setMode(next: 'studio' | 'manual'): void {
   mode = next;
+  // the view survives a refresh; the paper under it does not, so a restored
+  // painting session opens on a clean sheet rather than pretending otherwise
+  prefs.set('mode', next);
   const app = elements.app;
   if (next === 'manual') {
     app.dataset.mode = 'manual';
@@ -124,6 +141,7 @@ function setMode(next: 'studio' | 'manual'): void {
           settings,
           dropOptions,
           save: () => saveSettings(settings),
+          onBrushChanged: (drop) => prefs.setBrush({ color: drop.color, radius: drop.radius, wetness: drop.wetness }),
           onHandoff: (blob, thumbDataUri, recipe) => {
             studio.enqueueHandmade(recipe, blob, thumbDataUri);
             setMode('studio');
@@ -178,10 +196,12 @@ const shell: StudioShell = new StudioShell(
   },
   () => settings,
   () => health,
+  prefs,
 );
 
 void player.addEventListener('volumechange', () => {
   settings.music.volume = player.volume;
+  prefs.set('muted', player.muted);
   saveSettings(settings);
 });
 
@@ -201,9 +221,14 @@ void api
     const shared = readShareFromHash(window.location.hash, settings.ink);
     if (shared) studio.applyShare(shared);
     elements.app.dataset.mode = 'studio';
-    // #watch=1 drops the configuration so the film can sit on a screen
-    shell.setWatch(/[#&?]watch(=1)?\b/.test(window.location.hash + window.location.search));
+    // #watch=1 drops the configuration so the film can sit on a screen; the URL
+    // is the louder signal, and the stored preference carries a reload of it
+    const watched = /[#&?]watch(=1)?\b/.test(window.location.hash + window.location.search);
+    shell.setWatch(watched || prefs.state().watch);
     shell.refresh();
+    // A shared run is a studio run, and a watched screen has no controls to put
+    // the painting mode into, so only a plain visit reopens where it was left.
+    if (!shell.watchOnly && !shared && prefs.state().mode === 'manual') setMode('manual');
     const missing: string[] = [];
     if (!health) missing.push('the local server is not reachable (start it with npm run dev)');
     else {

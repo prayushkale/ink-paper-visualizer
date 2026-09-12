@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Paper } from '../ink/paper';
 import type { Fold } from '../state';
+import { stageColor, THEME_EVENT } from '../ui/theme';
 
 export class InkScene {
   readonly renderer: THREE.WebGLRenderer;
@@ -18,7 +19,9 @@ export class InkScene {
     container.appendChild(this.renderer.domElement);
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
     this.camera.position.set(0, 0, 3);
-    this.scene.background = new THREE.Color('#1a1a1e');
+    // the backdrop belongs to the page, so it is taken from the theme rather
+    // than fixed here: a canvas cannot read a custom property on its own
+    this.scene.background = new THREE.Color(stageColor());
     this.texture = new THREE.CanvasTexture(paper.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
     const geo = new THREE.PlaneGeometry(2, 2);
@@ -26,6 +29,10 @@ export class InkScene {
     this.paperMesh = new THREE.Mesh(geo, mat);
     this.scene.add(this.paperMesh);
     window.addEventListener('resize', () => this.resize(container));
+    window.addEventListener(THEME_EVENT, () => {
+      this.scene.background = new THREE.Color(stageColor());
+      this.render();
+    });
     this.resize(container);
   }
 

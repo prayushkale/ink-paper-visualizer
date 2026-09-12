@@ -4,6 +4,28 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0d0c10" />
+  <script>
+    // The theme has to be on the document before the browser paints, which is
+    // earlier than the module bundle runs - a theme applied from there shows as
+    // a flash of the wrong palette. This is the same read the prefs store does
+    // (see src/ui/prefs.ts and src/ui/theme.ts): what was chosen, else the
+    // system's answer, else dark.
+    (() => {
+      let theme = '';
+      try {
+        const stored = JSON.parse(localStorage.getItem('inkfilm.prefs.v1') || '{}');
+        if (stored && (stored.theme === 'light' || stored.theme === 'dark')) theme = stored.theme;
+      } catch {
+        /* corrupt or blocked storage: the system still has an answer */
+      }
+      if (!theme) {
+        theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
+      document.documentElement.dataset.theme = theme;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f3ec' : '#0d0c10');
+    })();
+  </script>
   <title>Ink &amp; Film — a continuous imagined stream</title>
   <meta name="description" content="Real ink blots, imagined by a vision model, realised as one unbroken film you can direct." />
   <link rel="stylesheet" href="/src/styles.css" />

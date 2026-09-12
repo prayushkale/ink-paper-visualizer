@@ -7,6 +7,9 @@ import type { InkStudio, StudioView } from '../studio/studio';
 import { renderControls, type ControlActions } from './controls';
 import { renderHud, renderPreparing, renderStatusPill, renderTelemetry } from './hud';
 import { renderRail } from './rail';
+import { createSectionStore, isSectionId } from './sections';
+import type { UiPrefsStore } from './prefs';
+import { applyTheme, otherTheme } from './theme';
 import { estimateRun, minutesLabel, usd } from '../state';
 
 /** Everything the settings column depends on, cheap enough to compare per tick. */
@@ -74,6 +77,8 @@ export class StudioShell {
   private draggingSlider = false;
   /** Highest alert id already shown as a toast. */
   private lastAlertId = 0;
+  /** Which sidebar sections are open: read once on load, written through on toggle. */
+  private readonly sections = createSectionStore();
 
   constructor(
     private readonly elements: ShellElements,
@@ -81,6 +86,8 @@ export class StudioShell {
     private readonly actions: ShellActions,
     private readonly getSettings: () => Settings,
     private readonly getHealth: () => HealthResponse | null,
+    /** The page's own memory: mute, spectator mode. Settings live elsewhere. */
+    private readonly prefs: UiPrefsStore,
   ) {
     elements.controls.addEventListener('click', (event) => this.onClick(event));
     elements.controls.addEventListener('change', (event) => this.onChange(event));
@@ -88,6 +95,9 @@ export class StudioShell {
     elements.controls.addEventListener('pointerup', () => {
       this.draggingSlider = false;
     });
+    // `toggle` does not bubble, so the capture phase is what hears the sections
+    // in the settings column open and close
+    elements.controls.addEventListener('toggle', (event) => this.onSectionToggle(event), true);
     elements.telemetry.addEventListener('click', (event) => this.onClick(event));
     elements.topbar.addEventListener('click', (event) => this.onClick(event));
     // double-click the picture for fullscreen, the way a video player behaves
@@ -137,6 +147,7 @@ export class StudioShell {
       case 'poster': void this.downloadPoster(); break;
       case 'show-controls': this.setWatch(false); break;
       case 'mute': this.toggleSound(); break;
+      case 'theme': this.toggleTheme(); break;
       case 'manual': this.actions.enterManual(); break;
       case 'mood': if (value) this.actions.setMood(value as never); break;
       case 'quality': if (value) this.actions.setQuality(value as never); break;
@@ -246,8 +257,21 @@ export class StudioShell {
   /** Spectator mode: no configuration, just the film on a screen. */
   setWatch(watch: boolean): void {
     this.elements.app.dataset.watch = watch ? '1' : '0';
+    // A watched link is the only way into this mode, so leaving it has to take
+    // the hash out too: otherwise the next refresh walks straight back in.
+    if (!watch) this.dropWatchFromHash();
+    this.prefs.set('watch', watch);
     this.lastControlsKey = '';
     this.render(this.studio.view);
+  }
+
+  /** Removes `watch` from the URL without reloading or losing a share code. */
+  private dropWatchFromHash(): void {
+    const hash = window.location.hash.replace(/^#/, '');
+    if (hash === '' || !/(^|&)watch(=1)?$/.test(hash)) return;
+    const kept = hash.split('&').filter((part) => !/^watch(=|$)/.test(part));
+    const next = kept.length > 0 ? `#${kept.join('&')}` : window.location.pathname + window.location.search;
+    window.history.replaceState(null, '', next);
   }
 
   get watchOnly(): boolean {
@@ -259,6 +283,19 @@ export class StudioShell {
     const player = this.elements.app.querySelector('video');
     if (!player) return;
     player.muted = !player.muted;
+    this.prefs.set('muted', player.muted);
+    this.lastTopKey = '';
+    this.render(this.studio.view);
+  }
+
+  /**
+   * Light and dark. The palette follows the attribute, but the WebGL stage and
+   * the browser-chrome tint are told directly (see `theme.ts`).
+   */
+  private toggleTheme(): void {
+    const next = otherTheme(this.prefs.state().theme);
+    this.prefs.set('theme', next);
+    applyTheme(next);
     this.lastTopKey = '';
     this.render(this.studio.view);
   }
@@ -287,6 +324,27 @@ export class StudioShell {
       if (alert.id <= this.lastAlertId) continue;
       this.lastAlertId = alert.id;
       this.toast(alert.text, alert.kind);
+    }
+  }
+
+  /** Remembers a section the user opened or closed, so the next visit keeps it. */
+  private onSectionToggle(event: Event): void {
+    const node = event.target as HTMLDetailsElement | null;
+    const id = node?.dataset?.section;
+    if (!node || !isSectionId(id)) return;
+    this.sections.set(id, node.open);
+  }
+
+  /**
+   * Puts each section back the way the user left it. The column is rebuilt from
+   * scratch whenever settings change, and every section is written closed, so
+   * this is the only thing that remembers the layout.
+   */
+  private applySectionState(): void {
+    const state = this.sections.state();
+    for (const node of Array.from(this.elements.controlBody.querySelectorAll<HTMLDetailsElement>('details[data-section]'))) {
+      const id = node.dataset.section;
+      if (isSectionId(id)) node.open = state[id];
     }
   }
 
@@ -334,14 +392,9 @@ export class StudioShell {
     const key = controlsKey(view, settings);
     if (key === this.lastControlsKey) return;
     if (this.draggingSlider) return;
-    const open = Array.from(this.elements.controlBody.querySelectorAll('details')).map((node) => node.open);
     this.lastControlsKey = key;
     renderControls(this.elements.controlBody, view, settings, this.actions);
-    if (open.length > 0) {
-      Array.from(this.elements.controlBody.querySelectorAll('details')).forEach((node, index) => {
-        if (index < open.length) node.open = open[index]!;
-      });
-    }
+    this.applySectionState();
   }
 
   private renderTopActions(busy: boolean, view: StudioView): void {
@@ -352,6 +405,10 @@ export class StudioShell {
       ? '<button class="ghost" data-action="mute" title="Mute the film">Sound on</button>'
       : '<button class="ghost" data-action="mute" title="Unmute the film">Muted</button>';
     const fullscreen = '<button class="ghost" data-action="fullscreen" title="Double-click the film for fullscreen">Fullscreen</button>';
+    // the label names the palette the click would give you, not the one you are in
+    const theme = this.prefs.state().theme === 'dark'
+      ? '<button class="ghost" data-action="theme" title="Use the light palette">Light</button>'
+      : '<button class="ghost" data-action="theme" title="Use the dark palette">Dark</button>';
     const estimate = estimateRun({
       seconds: this.getSettings().budget.sessionCapSeconds,
       sessionCapSeconds: this.getSettings().budget.sessionCapSeconds,
@@ -362,9 +419,10 @@ export class StudioShell {
     if (this.watchOnly) {
       slot.innerHTML = busy
         ? `${view.status === 'paused' ? '<button class="secondary" data-action="resume-film" title="Open a new session and play">Play</button>' : '<button class="secondary" data-action="pause-film" title="Close the session and stop billing">Pause</button>'}
-           ${fullscreen}${sound}<button class="danger" data-action="stop">Stop the film</button>`
+           ${fullscreen}${theme}${sound}<button class="danger" data-action="stop">Stop the film</button>`
         : `<button class="primary" data-action="start">Start the film</button>
            ${sound}
+           ${theme}
            <button class="ghost" data-action="show-controls">Show everything</button>`;
       return;
     }
@@ -373,6 +431,7 @@ export class StudioShell {
           ? '<button class="secondary" data-action="resume-film" title="Open a new session on the frozen frame and play">Play the film <span class="muted">new session</span></button>'
           : '<button class="secondary" data-action="pause-film" title="Close the session now so nothing more is billed">Pause the film</button>'}
          ${fullscreen}
+         ${theme}
          ${sound}
          <button class="danger" data-action="stop">Stop the film</button>`
       : `<button class="primary" data-action="start" ${view.status === 'preflight' ? 'disabled' : ''}>
@@ -381,6 +440,7 @@ export class StudioShell {
          <button class="secondary" data-action="share">Copy share link</button>
          <button class="secondary" data-action="poster" ${view.rail.length > 0 ? '' : 'disabled'}>Poster</button>
          ${fullscreen}
+         ${theme}
          ${sound}
          <button class="ghost" data-action="manual">Paint one myself</button>`;
   }
