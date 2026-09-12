@@ -1,4 +1,5 @@
 import { foldGeometry } from './fold-math';
+import { paintBeats, type PaintBeat } from './paintReel';
 import { renderOps } from './recipe';
 import { createRng, clamp } from './rng';
 import type { CanvasSpec, DropOptions, Fold, InkOp, InkRecipe, UV } from './types';
@@ -128,10 +129,31 @@ export class Paper {
 
   /** Replays a whole recipe: paint, then fold, then grain. */
   render(recipe: InkRecipe): void {
+    this.renderInStages(recipe, () => {});
+  }
+
+  /**
+   * Replays a recipe a beat at a time, reporting after each one.
+   *
+   * `render` is this with the beats dropped, so the painting a viewer watches
+   * and the painting the vision model is shown are the same pass in the same
+   * order: a show can never drift from the picture it is showing.
+   */
+  renderInStages(recipe: InkRecipe, onBeat: (beat: PaintBeat) => void): void {
     this.clear();
-    this.applyOps(renderOps(recipe));
-    for (const fold of recipe.folds) this.commitFold(fold);
-    drawGrain(this.ctx, this.spec, recipe.grain, recipe.seed);
+    const ops = renderOps(recipe);
+    let next = 0;
+    for (const beat of paintBeats(recipe)) {
+      if (beat.kind === 'ink') {
+        const op = ops[next++];
+        if (op) this.applyOp(op);
+      } else if (beat.kind === 'fold-print' && beat.fold) {
+        this.commitFold(beat.fold);
+      } else if (beat.kind === 'grain') {
+        drawGrain(this.ctx, this.spec, recipe.grain, recipe.seed);
+      }
+      onBeat(beat);
+    }
   }
 
   /** Executes an op log. Pure with respect to the canvas: same ops, same ink. */

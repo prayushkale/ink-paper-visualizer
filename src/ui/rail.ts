@@ -1,7 +1,9 @@
 import { CAMERA_MOVES, type CameraMoveId } from '../presets/camera';
 import type { StudioView, BlotView } from '../studio/studio';
+import { paintReelMarkup, reelIsPlaying } from './paint';
 
 const STATE_LABEL: Record<string, string> = {
+  painting: 'painting',
   invented: 'inventing',
   rendered: 'painted',
   uploaded: 'hosted',
@@ -20,6 +22,10 @@ function esc(text: string): string {
 /** One blot card: the picture, what the model saw in it, and its angle views. */
 export function blotCard(blot: BlotView, currentId: string | null): string {
   const isCurrent = blot.id === currentId;
+  // A blot shows its own painting while that is playing, whatever stage the
+  // pipeline has already carried it to: the card is about what the rail has to
+  // show, not about a state that is a second old by the time it is read.
+  const state = blot.painting ? 'painting' : blot.state;
   const angles = blot.angles
     .map((angle) => `
       <span class="angle ${angle.state}" title="${esc(angle.label)}">
@@ -27,14 +33,15 @@ export function blotCard(blot: BlotView, currentId: string | null): string {
       </span>`)
     .join('');
   return `
-    <article class="blot ${blot.state} ${isCurrent ? 'current' : ''}">
+    <article class="blot ${state} ${isCurrent ? 'current' : ''}">
       <div class="blot-thumb">
         ${blot.thumb ? `<img src="${blot.thumb}" alt="ink blot ${blot.seed}" loading="lazy" />` : '<div class="skeleton"></div>'}
+        ${blot.paint ? paintReelMarkup(blot.paint) : ''}
         ${isCurrent ? '<span class="now">on screen</span>' : ''}
       </div>
       <div class="blot-body">
         <div class="blot-head">
-          <span class="chip state-${blot.state}">${STATE_LABEL[blot.state] ?? blot.state}</span>
+          <span class="chip state-${blot.painting ? 'invented' : blot.state}">${esc(STATE_LABEL[state] ?? state)}</span>
           ${blot.handmade ? '<span class="chip handmade">hand-painted</span>' : ''}
           <span class="seed">#${blot.seed}</span>
         </div>
@@ -46,8 +53,24 @@ export function blotCard(blot: BlotView, currentId: string | null): string {
     </article>`;
 }
 
+/** Which blots are painting, and which frames of theirs are on the rail. */
+function reelsOnShow(view: StudioView): string {
+  return view.rail
+    .filter((blot) => blot.paint !== null && blot.paint.length > 0)
+    .map((blot) => `${blot.id}:${blot.paint!.length}:${blot.paint![0]!.at}`)
+    .join(',');
+}
+
 export function renderRail(root: HTMLElement, view: StudioView, options: { compact?: boolean } = {}): void {
   const currentId = view.current?.blotId ?? null;
+  // A painting plays as a CSS animation over markup the shell rebuilds on a
+  // heartbeat, so a rewrite would start it again from its first frame. The
+  // studio paints one blot at a time and a card cannot change while its own ink
+  // is arriving, so the rail is left exactly as it is until the show is over -
+  // and until a new blot arrives, which is the one thing that does matter.
+  const ids = view.rail.map((blot) => blot.id).join(',');
+  const reels = reelsOnShow(view);
+  if (reelIsPlaying(root, reels === '' ? '' : `${ids}|${reels}`)) return;
   const cards = view.rail.map((blot) => blotCard(blot, currentId)).join('');
   const empty = view.rail.length === 0
     ? '<p class="muted pad">The rail fills as soon as a run starts. Press <strong>Start the film</strong>.</p>'

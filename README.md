@@ -107,6 +107,14 @@ seeded ink engine ──► blot ──► hosted on fal ──► vision model 
    done, and runs an elapsed clock, because it costs nothing but looks like a
    hang otherwise. **Stop** during the pre-flight cancels it before a session
    ever opens.
+
+   The rail is where a run shows its work. It paints **one blot at a time**, and
+   the card plays that painting back as it happens: the tools landing one by one,
+   the crease drawn across the paper before each fold mirrors wet ink onto the
+   far half, then the grain pressed in, before the card settles onto the finished
+   blot. Only the *invention* is paced - hosting, the vision call and the orbits
+   still overlap across blots, so the show changes what you watch, not what it
+   costs or how long the run takes to open.
 2. **Imagining.** The vision model — `deepseek/deepseek-v4.1-flash` by default —
    is handed the blot plus the running context (mood, score, camera move, and the
    last several beats) and is asked to find the specific thing the blot already

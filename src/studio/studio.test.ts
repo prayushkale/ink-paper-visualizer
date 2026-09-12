@@ -310,10 +310,13 @@ describe('InkStudio', () => {
     expect(preparing).not.toBeNull();
     expect(preparing!.target).toBe(3);
     expect(preparing!.ready).toBe(0);
+    // The rail paints its blots one at a time, so the three are at three
+    // different stages while the start waits on the first: the counters still
+    // name the work, and the stage names the least-finished blot - the one
+    // actually gating the start.
     expect(preparing!.working).toBe(3);
-    // three blots, two orbits each: the views counter is the real remaining work
     expect(preparing!.anglesWanted).toBe(6);
-    expect(preparing!.stage).toBe('shooting');
+    expect(preparing!.stage).toBe('imagining');
     expect(preparing!.elapsedMs).toBeGreaterThan(0);
 
     gate.release();

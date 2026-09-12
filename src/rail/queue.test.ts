@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { BlotRail, DEFAULT_RAIL_OPTIONS, type RailPorts } from './queue';
 import { fallbackReading, type BlotReading } from './reading';
 import { inkRecipeFromSeed } from '../ink/recipe';
+import { paintBeats, paintFrames, paintShowMs } from '../ink/paintReel';
+import type { InkRecipe } from '../ink/types';
 import { defaultCameraConfig, CAMERA_MOVES, type CameraMoveId } from '../presets/camera';
 import { MOODS } from '../presets/moods';
 import { MUSIC_PRESETS } from '../presets/music';
@@ -378,5 +380,73 @@ describe('BlotRail', () => {
     repeatedRail.reset();
     await settle(repeatedRail);
     expect(repeated.calls.interpret.length).toBeGreaterThan(before);
+  });
+});
+
+/** The reel a render port hands the rail: the same beats, with frames on them. */
+function reelFor(recipe: InkRecipe): ReturnType<typeof paintFrames> {
+  const beats = paintBeats(recipe);
+  return paintFrames(beats, beats.map((_, index) => `data:image/jpeg;base64,frame-${index}`));
+}
+
+describe('BlotRail showing the paintings', () => {
+  it('paints one blot at a time and waits out each show before inventing the next', async () => {
+    const clock = { value: 1_700_000_000_000 };
+    const h = harness({
+      now: () => clock.value,
+      render: async (recipe) => ({
+        blob: new Blob([String(recipe.seed)], { type: 'image/png' }),
+        thumbDataUri: 'data:image/png;base64,thumb',
+        visionDataUri: 'data:image/png;base64,vision',
+        paint: reelFor(recipe),
+      }),
+    });
+    const rail = new BlotRail(h.ports, { ...DEFAULT_RAIL_OPTIONS, preparedTarget: 3, showPainting: true });
+
+    await rail.pump();
+    expect(rail.all).toHaveLength(1);
+    const opening = rail.all[0]!;
+    const showMs = paintShowMs(opening.paint!);
+    expect(showMs).toBeGreaterThan(0);
+    expect(opening.showUntil).toBe(clock.value + showMs);
+
+    // the rail is busy showing that painting: no second card yet
+    await rail.pump();
+    expect(rail.all).toHaveLength(1);
+
+    clock.value += showMs;
+    await rail.pump();
+    expect(rail.all).toHaveLength(2);
+    // and the frames of the show that just finished are let go
+    expect(rail.all[0]!.paint).toBeUndefined();
+  });
+
+  it('keeps filling when a render has no frames to show', async () => {
+    const clock = { value: 1_700_000_000_000 };
+    const h = harness({ now: () => clock.value });
+    const rail = new BlotRail(h.ports, { ...DEFAULT_RAIL_OPTIONS, preparedTarget: 2, showPainting: true });
+    await settle(rail);
+    expect(rail.ready).toHaveLength(2);
+    expect(rail.all.every((job) => job.showUntil === undefined)).toBe(true);
+  });
+
+  it('holds the framing of a painting for the whole show, folds included', async () => {
+    const clock = { value: 1_700_000_000_000 };
+    const recipe = inkRecipeFromSeed({ seed: 12, folds: [{ axis: 'vertical', direction: 'left' }] });
+    const h = harness({
+      now: () => clock.value,
+      invent: () => recipe,
+      render: async (given) => ({
+        blob: new Blob(['x'], { type: 'image/png' }),
+        thumbDataUri: 'data:image/png;base64,thumb',
+        visionDataUri: 'data:image/png;base64,vision',
+        paint: reelFor(given),
+      }),
+    });
+    const rail = new BlotRail(h.ports, { ...DEFAULT_RAIL_OPTIONS, preparedTarget: 2, showPainting: true });
+    await rail.pump();
+    // the crease is on the rail: the show carries the fold beats, not just the ink
+    expect(rail.all[0]!.paint!.some((frame) => frame.kind === 'fold-guide')).toBe(true);
+    expect(rail.all[0]!.paint!.some((frame) => frame.label === 'folding the paper')).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ import { musicById } from '../presets/music';
 import { inkRecipeFromSeed } from '../ink/recipe';
 import { canvasForAspect, type AspectRatio, type InkRecipe } from '../ink/types';
 import type { RenderedBlot } from '../ink/render';
+import type { PaintFrame } from '../ink/paintReel';
 import { BlotRail, DEFAULT_RAIL_OPTIONS, type BlotJob, type BlotState, type RailPorts, type RailProgress } from '../rail/queue';
 import { createStudioInterpreter, type VisionCaller } from '../rail/interpreter';
 import { buildMultiAngleInput, type MultiAngleInput } from '../angle/multiAngle';
@@ -59,6 +60,14 @@ export interface BlotView {
   handmade: boolean;
   seed: number;
   thumb: string;
+  /**
+   * The blot's painting, a beat at a time, while it is being shown on the rail.
+   * Null once its show is over, and null for a blot that was never replayed -
+   * the card falls back to the finished picture either way.
+   */
+  paint: PaintFrame[] | null;
+  /** True while that show is still running, whatever stage the blot has reached behind it. */
+  painting: boolean;
   subject: string | null;
   prompt: string | null;
   url: string | null;
@@ -252,6 +261,9 @@ export class InkStudio {
       preparedTarget: 3,
       maxJobs: 8,
       angleConcurrency: 2,
+      // the rail is the one place the run shows its work, so it paints its
+      // blots onto the rail one at a time instead of filling it instantly
+      showPainting: true,
     });
     // an object-literal getter cannot be an arrow function, and the scheduler
     // reads live studio state, so it closes over this alias instead of `this`
@@ -382,12 +394,20 @@ export class InkStudio {
   }
 
   private blotView(job: BlotJob): BlotView {
+    // the show outlives the stage it was painted in: a blot is usually hosted
+    // and read by the vision model while its own painting is still playing
+    const showing = job.paint !== undefined
+      && job.paint.length > 0
+      && job.showUntil !== undefined
+      && this.now() < job.showUntil;
     return {
       id: job.id,
       state: job.state,
       handmade: job.handmade,
       seed: job.recipe.seed,
       thumb: job.thumbDataUri ?? '',
+      paint: showing ? job.paint! : null,
+      painting: showing,
       subject: job.reading?.subject ?? null,
       prompt: job.reading?.prompt ?? null,
       url: job.url ?? null,
@@ -517,6 +537,7 @@ export class InkStudio {
     this.log('info', 'preparing the first blot');
     try {
       await this.rail.pump();
+      this.emit();
       const opening = await this.waitForBlot();
       if (this.startCancelled) return { ok: false, error: 'stopped during the pre-flight' };
       if (!opening || !opening.url) {
@@ -1135,6 +1156,9 @@ export class InkStudio {
       if (next) return next;
       await this.sleep(250);
       await this.rail.pump();
+      // a blot that was just painted starts playing straight away, rather than
+      // up to a heartbeat later, which would cut its show short
+      this.emit();
     }
     return this.rail.next() ?? null;
   }

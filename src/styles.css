@@ -300,6 +300,33 @@ main {
   font-size: 10px; text-align: center; padding: 2px 4px; border-radius: 4px;
   background: #d8a24ae6; color: #221a08; font-weight: 650;
 }
+
+/* The blot being painted takes the rail's whole width: at 78px a painting is a
+   thumbnail, and this is the one moment the rail has something to show. */
+.blot.painting { grid-template-columns: 1fr; border-color: var(--accent-soft); }
+.blot.painting .blot-thumb img { aspect-ratio: auto; }
+
+/* The painting, replayed. Every frame carries when it appears and how long it
+   holds, and the finished picture sits underneath, so the last frame handing
+   over to it is invisible. No script drives this: it is all one CSS animation,
+   which is what makes it survive the shell's repaints. */
+.blot-thumb .paint-reel { position: absolute; inset: 0; pointer-events: none; }
+.blot-thumb .paint-frame,
+.blot-thumb .paint-note {
+  position: absolute; opacity: 0;
+  animation-name: paint-beat; animation-timing-function: linear;
+  animation-duration: var(--hold, 260ms); animation-delay: var(--at, 0ms);
+}
+.blot-thumb .paint-frame {
+  inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);
+}
+.blot-thumb .paint-note {
+  left: 4px; right: 4px; bottom: 4px; text-align: center; padding: 2px 4px; border-radius: 4px;
+  font-size: 10px; font-weight: 650; background: #12111aec; color: var(--paper);
+}
+@keyframes paint-beat { from { opacity: 1 } to { opacity: 1 } }
+/* the finished blot is already there underneath, so this costs nothing */
+@media (prefers-reduced-motion: reduce) { .blot-thumb .paint-reel { display: none; } }
 .blot-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .blot-body { min-width: 0; }
 .subject { margin: 6px 0 2px; font-weight: 600; font-size: 13px; }

@@ -3,6 +3,7 @@ import type { MoodPreset } from '../presets/moods';
 import type { MusicPreset } from '../presets/music';
 import type { InkRecipe } from '../ink/types';
 import { recipeKey } from '../ink/recipe';
+import { paintShowMs, type PaintFrame } from '../ink/paintReel';
 import type { BlotReading } from './reading';
 
 export type BlotState =
@@ -45,6 +46,14 @@ export interface BlotJob {
   thumbDataUri?: string;
   /** Full-quality data URI handed to the vision model. */
   visionDataUri?: string;
+  /**
+   * The blot's own painting, a beat at a time, so the rail can show it being
+   * made. Dropped once its show has run, because the frames are only of use
+   * while they are playing.
+   */
+  paint?: PaintFrame[];
+  /** When that show ends. A blot whose painting is still at this moment is painting. */
+  showUntil?: number;
   /** fal storage URL used as `image_url` / `end_image_url`. */
   url?: string;
   reading?: BlotReading;
@@ -56,7 +65,12 @@ export interface BlotJob {
 /** Callbacks the rail needs. Everything external is injected, so it is testable. */
 export interface RailPorts {
   invent(seed: number): InkRecipe;
-  render(recipe: InkRecipe): Promise<{ blob: Blob; thumbDataUri: string; visionDataUri: string }>;
+  render(recipe: InkRecipe): Promise<{
+    blob: Blob;
+    thumbDataUri: string;
+    visionDataUri: string;
+    paint?: PaintFrame[];
+  }>;
   upload(blob: Blob, name: string): Promise<string>;
   interpret(args: {
     blot: BlotJob;
@@ -87,6 +101,15 @@ export interface RailOptions {
   angleConcurrency: number;
   /** Stage attempts before a blot is dropped. */
   maxAttempts: number;
+  /**
+   * Whether the rail paces itself by the paintings it is showing.
+   *
+   * On, a blot is invented only once the one before it has finished playing on
+   * the rail, so the pre-flight reads as a sequence of paintings rather than a
+   * batch of cards appearing at once. Off, the rail fills as fast as its ports
+   * allow - and nothing is paced by a painting that has no frames to show.
+   */
+  showPainting: boolean;
 }
 
 /**
@@ -121,6 +144,7 @@ export const DEFAULT_RAIL_OPTIONS: RailOptions = {
   interpretConcurrency: 2,
   angleConcurrency: 2,
   maxAttempts: 2,
+  showPainting: false,
 };
 
 /** What each pre-session state means for the person waiting on it. */
@@ -281,6 +305,7 @@ export class BlotRail {
     if (this.pumping) return;
     this.pumping = true;
     try {
+      this.dropSpentReels();
       this.fill();
       const work = this.jobs.map((job) => this.advance(job));
       await Promise.all(work);
@@ -292,7 +317,16 @@ export class BlotRail {
   /** Invent more blots until the rail holds `preparedTarget` prepared-or-coming. */
   private fill(): void {
     const inFlight = this.jobs.filter((job) => job.state !== 'passed' && job.state !== 'failed').length;
-    const needed = this.options.preparedTarget - inFlight;
+    let needed = this.options.preparedTarget - inFlight;
+    // When the rail is showing the paintings, one blot at a time is the whole
+    // point: the next is invented only after the last one's ink has been on
+    // screen. Everything the rail waits on downstream (hosting, the vision
+    // call, the orbits) still overlaps across blots, so this paces the show
+    // rather than the pipeline.
+    if (this.options.showPainting) {
+      if (this.painting()) return;
+      needed = Math.min(needed, 1);
+    }
     for (let i = 0; i < needed; i++) {
       if (inFlight + i >= this.options.maxJobs) break;
       const recipe = this.ports.invent(this.ports.nextSeed());
@@ -312,6 +346,22 @@ export class BlotRail {
     this.jobs.sort((a, b) => Number(b.handmade) - Number(a.handmade) || a.createdAt - b.createdAt);
   }
 
+  /** True while a blot is being painted, or its painting is still on screen. */
+  private painting(): boolean {
+    const now = this.ports.now();
+    return this.jobs.some((job) =>
+      job.state === 'invented'
+      || (job.paint !== undefined && job.showUntil !== undefined && now < job.showUntil));
+  }
+
+  /** Forgets the frames whose show has finished: a reel is only of use while it plays. */
+  private dropSpentReels(): void {
+    const now = this.ports.now();
+    for (const job of this.jobs) {
+      if (job.paint !== undefined && job.showUntil !== undefined && now >= job.showUntil) delete job.paint;
+    }
+  }
+
   private async advance(job: BlotJob): Promise<void> {
     switch (job.state) {
       case 'invented':
@@ -320,6 +370,12 @@ export class BlotRail {
           job.blob = rendered.blob;
           job.thumbDataUri = rendered.thumbDataUri;
           job.visionDataUri = rendered.visionDataUri;
+          job.paint = rendered.paint;
+          // the show starts when the frames reach the screen, which is the next
+          // emit to the shell, so its clock is stamped here rather than in the view
+          job.showUntil = rendered.paint && rendered.paint.length > 0
+            ? this.ports.now() + paintShowMs(rendered.paint)
+            : undefined;
         }, 'rendered');
         break;
       case 'rendered':
