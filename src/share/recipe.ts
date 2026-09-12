@@ -1,3 +1,4 @@
+import { MAX_FOLDS } from '../ink/recipe';
 import { clamp, clamp01, parseSeed } from '../ink/rng';
 import { canvasForAspect, type AspectRatio, type InkRecipe, type InkToolId } from '../ink/types';
 import { CAMERA_MOVE_IDS, type CameraMoveId } from '../presets/camera';
@@ -118,7 +119,7 @@ export function decodeShare(code: string, fallbackRecipe: InkRecipe): SharedSett
       folds: Array.isArray(recipe.folds)
         ? recipe.folds
           .filter(isRecord)
-          .slice(0, 3)
+          .slice(0, MAX_FOLDS)
           .map((fold) => ({
             axis: fold.axis === 'horizontal' ? 'horizontal' as const : 'vertical' as const,
             direction: asIn(fold.direction, ['left', 'right', 'top', 'bottom'] as const, 'left'),

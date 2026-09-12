@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   INK_COLOR_RANGE,
   INK_PALETTES,
+  MAX_FOLDS,
   foldPlan,
   inkRecipeFromSeed,
   randomInkPalette,
@@ -32,11 +33,11 @@ describe('canvasForAspect', () => {
 });
 
 describe('foldPlan', () => {
-  it('always produces a valid plan of 0-3 folds', () => {
+  it('always produces a valid plan of 0-MAX_FOLDS folds', () => {
     for (let seed = 0; seed < 600; seed++) {
       const folds = foldPlan(createRng(seed));
       expect(folds.length).toBeGreaterThanOrEqual(0);
-      expect(folds.length).toBeLessThanOrEqual(3);
+      expect(folds.length).toBeLessThanOrEqual(MAX_FOLDS);
       for (const fold of folds) {
         expect(['vertical', 'horizontal']).toContain(fold.axis);
         expect(
@@ -49,13 +50,17 @@ describe('foldPlan', () => {
   });
 
   it('produces unsymmetric blots sometimes and over-folded ones rarely', () => {
-    const counts = { 0: 0, 1: 0, 2: 0, 3: 0 } as Record<number, number>;
+    const counts = new Array<number>(MAX_FOLDS + 1).fill(0);
     for (let seed = 0; seed < 4000; seed++) {
       counts[foldPlan(createRng(seed)).length]!++;
     }
     expect(counts[0]).toBeGreaterThan(200);   // a decent share stay unsymmetric
     expect(counts[1]).toBeGreaterThan(counts[2]);
-    expect(counts[3]).toBeLessThan(counts[1]);
+    // the tail is reachable but stays thinner than the low counts, all the way out
+    for (let count = 4; count <= MAX_FOLDS; count++) {
+      expect(counts[count]).toBeGreaterThan(0);
+      expect(counts[count]).toBeLessThan(counts[count - 1]!);
+    }
   });
 
   it('mixes vertical and horizontal creases', () => {
@@ -109,7 +114,7 @@ describe('inkRecipeFromSeed', () => {
   it('defaults folds to an automatic plan and lets explicit folds win', () => {
     const automatic = inkRecipeFromSeed({ seed: 3 });
     expect(automatic.folds).toEqual(inkRecipeFromSeed({ seed: 3, folds: 'auto' }).folds);
-    expect(automatic.folds.length).toBeLessThanOrEqual(3);
+    expect(automatic.folds.length).toBeLessThanOrEqual(MAX_FOLDS);
     const explicit = inkRecipeFromSeed({ seed: 3, folds: [{ axis: 'vertical', direction: 'left', at: 0.5 }] });
     expect(explicit.folds).toEqual([{ axis: 'vertical', direction: 'left', at: 0.5 }]);
   });

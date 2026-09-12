@@ -64,10 +64,36 @@ export interface RecipeOptions {
   grain?: number;
 }
 
-/** 0.15 / 0.40 / 0.32 / 0.13 split over fold counts, chosen per seed. */
+/**
+ * Ceiling on how many creases one blot can take.
+ *
+ * Folds compose: every extra crease mirrors the result of the last one, so the
+ * symmetry multiplies while the ink reading stays legible. Past seven the blot
+ * turns into texture rather than a shape with a mirrored twin.
+ */
+export const MAX_FOLDS = 7;
+
+/**
+ * Weight per fold count, index = count, 0..MAX_FOLDS.
+ *
+ * The first four counts keep the original 0.15 / 0.40 / 0.32 / 0.13 shape, so a
+ * barely folded blot still dominates; the remaining 0.13 spreads thin over
+ * 4..7 because an over-folded blot should be an event, not the norm.
+ */
+const FOLD_COUNT_WEIGHTS = [0.15, 0.34, 0.26, 0.12, 0.07, 0.035, 0.018, 0.007];
+
+/** A plan of 0..MAX_FOLDS creases, chosen per seed. */
 export function foldPlan(rng: Rng): Fold[] {
   const roll = rng.next();
-  const count = roll < 0.15 ? 0 : roll < 0.55 ? 1 : roll < 0.87 ? 2 : 3;
+  let count = MAX_FOLDS;
+  let cumulative = 0;
+  for (let i = 0; i < FOLD_COUNT_WEIGHTS.length; i++) {
+    cumulative += FOLD_COUNT_WEIGHTS[i]!;
+    if (roll < cumulative) {
+      count = i;
+      break;
+    }
+  }
   const folds: Fold[] = [];
   for (let i = 0; i < count; i++) {
     const axis = rng.bool(0.5) ? 'vertical' : 'horizontal';

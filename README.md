@@ -96,7 +96,7 @@ seeded ink engine ──► blot ──► hosted on fal ──► vision model 
 
 1. **Ink.** A seed picks tools (drop, splatter, streak, curve, pool, drag, spray,
    backrun), draws 2–4 colours **at random** from the full pigment range, and
-   lays down a fold plan of 0–3 vertical/horizontal creases at a centre or
+   lays down a fold plan of 0–7 vertical/horizontal creases at a centre or
    off-centre position. The canvas is rendered at the stream's aspect ratio,
    because image-to-video inherits the ratio of the image you give it.
 

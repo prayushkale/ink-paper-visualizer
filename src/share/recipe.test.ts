@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { decodeShare, describeShare, encodeShare, readShareFromHash, shareUrl, type SharedSettings } from './recipe';
-import { defaultInkRecipe, inkRecipeFromSeed, renderOps } from '../ink/recipe';
+import { MAX_FOLDS, defaultInkRecipe, inkRecipeFromSeed, renderOps } from '../ink/recipe';
 import { canvasForAspect } from '../ink/types';
 
 const fallback = defaultInkRecipe();
@@ -111,6 +111,21 @@ describe('encodeShare / decodeShare', () => {
     expect(decoded.stream.memory).toBeLessThanOrEqual(50);
     expect(decoded.stream.arrivalMode).toBe('hard');
     expect(decoded.sessionCapSeconds).toBeGreaterThanOrEqual(10);
+  });
+
+  it('keeps a fold plan up to the fold ceiling and trims anything past it', () => {
+    const plan = (count: number) => Array.from({ length: count }, () => ({
+      axis: 'vertical' as const,
+      direction: 'left' as const,
+      at: 0.5,
+    }));
+    const full = makeShared();
+    full.recipe = { ...full.recipe, folds: plan(MAX_FOLDS) };
+    expect(decodeShare(encodeShare(full), fallback)!.recipe.folds).toHaveLength(MAX_FOLDS);
+
+    const over = makeShared();
+    over.recipe = { ...over.recipe, folds: plan(MAX_FOLDS + 2) };
+    expect(decodeShare(encodeShare(over), fallback)!.recipe.folds).toHaveLength(MAX_FOLDS);
   });
 
   it('drops moves that no longer exist but keeps the valid ones', () => {
