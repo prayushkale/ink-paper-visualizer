@@ -37,13 +37,33 @@ setProxyToken(settings.proxyToken || null);
 let health: HealthResponse | null = null;
 let mode: 'studio' | 'manual' = 'studio';
 
+/** 10-120 px: the whole span the size slider exposes. */
+function randomRadius(): number {
+  return 10 + Math.floor(Math.random() * 111);
+}
+
+/**
+ * 0.25-0.8, in the slider's own 0.05 steps. The band is the one the automatic
+ * engine rolls its blots from, so a hand-painted drop opens in the middle of
+ * that range rather than at a bone-dry or a sopping extreme.
+ */
+function randomWetness(): number {
+  return Math.round((0.25 + Math.random() * 0.55) * 20) / 20;
+}
+
 const storedBrush = prefs.state().brush;
+/**
+ * A stored colour is the only proof the brush was ever touched, so an empty one
+ * means there is nothing to come back to. The shipped 40 px / 0.50 then read as
+ * choices somebody made, so a first visit rolls all three at random instead.
+ */
+const freshBrush = storedBrush.color === '';
 const dropOptions: DropOptions = {
-  radius: storedBrush.radius,
+  radius: freshBrush ? randomRadius() : storedBrush.radius,
   // the brush opens on the pigment it was left on; a first visit has none, so
   // it picks one at random (the colour can still be changed)
   color: storedBrush.color || INK_COLOR_RANGE[Math.floor(Math.random() * INK_COLOR_RANGE.length)] || '#141821',
-  wetness: storedBrush.wetness,
+  wetness: freshBrush ? randomWetness() : storedBrush.wetness,
 };
 
 // ------------------------------------------------------------- lazy paper
