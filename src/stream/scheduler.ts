@@ -4,7 +4,7 @@ import type { MusicPreset } from '../presets/music';
 import type { StudioStatus } from '../state';
 import type { BlotJob, BlotRail } from '../rail/queue';
 import type { ChunkInfo } from './protocol';
-import { composeDirection, composeMoodShift, softenDirection } from './promptComposer';
+import { PRESERVE_CLAUSE, composeDirection, composeMoodShift, softenDirection } from './promptComposer';
 
 /** What the scheduler needs from a live session. */
 export interface SchedulerSession {
@@ -296,8 +296,12 @@ export class BlotScheduler {
   private sendContinuation(): void {
     const episode = this.options.readEpisode();
     const shift = this.pendingMoodShift;
-    const prompt = shift ?? `Continue the same take. ${episode.mood.lead} Preserve the paper-and-pigment surface and everything already established. ${episode.music.accent}.`;
-    if (this.emptyTicks >= this.stallTicksBeforeContinuation || shift) {
+    const prompt = shift ?? `Continue the same take. ${episode.mood.lead} ${PRESERVE_CLAUSE} ${episode.music.accent}.`;
+    // A continuation goes out for two different reasons: the rail is empty, or a
+    // mood change is riding along in the direction. Only the first is a stall -
+    // the second is the user's own doing, on a rail that may be perfectly full -
+    // and reporting it as one told people the rail had run dry when it had not.
+    if (this.emptyTicks >= this.stallTicksBeforeContinuation) {
       this.options.events?.onStall?.({ emptyTicks: this.emptyTicks });
     }
     const version = this.options.session.direct({ prompt, replan: true });

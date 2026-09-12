@@ -6,9 +6,18 @@ import type { BlotReading } from '../rail/reading';
 /** Palette sentence shared by every part of the film. */
 export function paletteSentence(colors: readonly string[]): string {
   return colors.length > 0
-    ? `The pigment here runs to ${colors.join(', ')}; take those colours from the ink rather than imposing a scheme.`
+    ? `The ink is currently running to ${colors.join(', ')}; let those colours grade the footage rather than impose a scheme on it.`
     : '';
 }
+
+/**
+ * The continuity clause three prompts share: the beat direction, a mid-stream
+ * mood shift and the scheduler's own stall continuation. One run that states its
+ * look three different ways reads as three different films, so the wording - and
+ * the insistence that the picture stays photographic rather than painted - lives
+ * here and is repeated verbatim.
+ */
+export const PRESERVE_CLAUSE = 'Preserve the live-action photographic look of every frame and everything already established.';
 
 export interface WorldPromptInput {
   mood: MoodPreset;
@@ -46,15 +55,15 @@ export function composeWorldPrompt(input: WorldPromptInput): string {
     `WORLD: ${mood.lead}`,
     `${pressure}`,
     '',
-    `MATERIAL: the world is made of ink and pigment on warm paper and keeps behaving like it. ${paletteSentence(palette)}`,
+    `MATERIAL: real photography of a real place, in real materials - skin, water, dust, stone, metal, fabric, weather - shot on 35mm with practical light, natural motion blur and true optics. The ink blot handed to you as the opening image is a reference for the forms, the composition and the colours of this world, never its look: no paper, no pigment, no brush marks, no wash, no drawing, no illustration, and never the blot itself on screen. ${paletteSentence(palette)}`,
     '',
-    'PRESERVE: preserve the paper-and-pigment surface, the colours the pigment is currently running to, the film\'s unhurried curiosity, and its refusal to explain itself. Preserve whatever figures or places have already appeared.',
+    `PRESERVE: ${PRESERVE_CLAUSE} Preserve the lens, the light and the camera language you opened with, the colours the ink is running to as the film's grade, the film's unhurried curiosity, and its refusal to explain itself. Preserve whatever figures or places have already appeared.`,
     '',
     'HOW THE FILM MOVES: the film is handed a new ink blot every few seconds, and each blot is an exact destination the picture must arrive at. Never announce a blot. Treat each incoming blot as something the world was already becoming.',
     '',
-    'STARTING FROM THE INK: every segment of this film is already inside a real ink painting when it begins. Read the painting\'s actual forms and colours and carry them forward as the film moves. Never treat the painting as a texture, a filter or a purely abstract shape.',
+    'STARTING FROM THE INK: every segment begins inside a real ink painting, and that painting is a reference photograph of the scene the film is already in. Read its actual forms - the silhouette, the mass, where the light falls, the colours - and rebuild them as real objects, a real location and real weather. The painting is the subject; its medium is never the picture.',
     '',
-    `OPENING: begin mid-motion, already underway — ${input.openingAction ?? 'a slow drift across the pigment as if the camera has been watching for a while'}.`,
+    `OPENING: begin mid-motion, already underway — ${input.openingAction ?? 'a slow push through real air and light, as if the camera has been watching this place for a while'}.`,
     '',
     `SOUND: ${sound}`,
   ].join('\n');
@@ -91,7 +100,7 @@ export function composeVisionPrompt(input: VisionPromptInput): string {
     `- Mood pressure: ${input.moodStrength.toFixed(2)} of 1, where 1 means commit fully to the mood.`,
     `- Score: ${music.label} at about ${music.bpm} BPM — ${music.brief}.`,
     `- ${cameraLine}`,
-    '- The painting is a real, already-shot frame of this film. Find the specific thing it looks like and describe it vividly enough to film, with concrete nouns, real motion and a light source.',
+    '- The painting is a reference photograph of a real scene, never its look. Name the real thing it depicts and describe it as live-action footage: concrete nouns, real materials, real motion, a named light source, a lens, and how the camera moves. Never write about ink, paper, pigment, brushwork, painting or animation.',
     `- Beats so far (oldest first):`,
     history,
     '',
@@ -122,7 +131,7 @@ export function composeDirection(input: DirectionInput): string {
   if (reading.prompt) parts.push(reading.prompt.trim());
   else if (reading.subject) parts.push(`${capitalise(reading.subject)} emerges from the pigment and keeps moving.`);
   if (input.palette && input.palette.length > 0) {
-    parts.push(`The ink this beat is heading into runs to ${input.palette.join(', ')}; let the picture take those colours from it.`);
+    parts.push(`The ink this beat is heading into runs to ${input.palette.join(', ')}; let those colours grade the shot rather than colour the world.`);
   }
 
   const moodClause = input.moodStrength >= 0.7
@@ -130,13 +139,13 @@ export function composeDirection(input: DirectionInput): string {
     : input.moodStrength >= 0.35
       ? `keep the film's own momentum while ${mood.tail}`
       : 'follow the film wherever it is already going';
-  parts.push(`Preserve the paper-and-pigment surface and everything already established. ${capitalise(moodClause)}.`);
+  parts.push(`${PRESERVE_CLAUSE} ${capitalise(moodClause)}.`);
 
   if (camera) parts.push(`${capitalise(camera.phrase)}.`);
   if (arrivalMode === 'hard') {
-    parts.push('The closing frame of this beat is fixed: resolve exactly into the incoming ink painting, reading its real forms and letting the picture become them rather than cutting or fading to it. The take then keeps running from inside that painting, so the next segment starts on the ink itself.');
+    parts.push('The closing frame of this beat is fixed: land exactly on the real scene the incoming ink painting depicts - the same forms, now real material under the same light - rather than cutting or fading to it. The take then keeps running from inside that scene. Never resolve into the painting itself: no blot, no paper, no pigment, no crease, no illustration.');
   } else {
-    parts.push('Let the picture drift toward the incoming ink painting and keep the take running from inside it, with no cut.');
+    parts.push('Let the picture drift toward the real scene the incoming ink painting depicts, keep the take running with no cut, and never let the ink, the paper or the crease show.');
   }
   if (reading.sound) parts.push(`Sound: ${reading.sound.trim()}`);
   else parts.push(`Sound: ${music.accent}.`);
@@ -161,7 +170,7 @@ export function composeMoodShift(input: MoodShiftInput): string {
   return [
     lead,
     to.lead,
-    `Preserve the paper-and-pigment surface, the figures and places already established, and the continuity of the take. ${capitalise(to.tail)}.`,
+    `${PRESERVE_CLAUSE} Keep the figures and places already established and the continuity of the take. ${capitalise(to.tail)}.`,
     paletteSentence(input.palette),
     `Sound: ${to.soundBrief}.`,
   ].join(' ');
@@ -171,7 +180,7 @@ export function composeMoodShift(input: MoodShiftInput): string {
 export function softenDirection(text: string): string {
   return [
     text,
-    'Keep it abstract and painterly: no recognisable people, no brands, no legible text, no graphic violence.',
+    'Keep it non-literal: no recognisable people, no brands, no legible text, no graphic violence.',
   ].join(' ');
 }
 

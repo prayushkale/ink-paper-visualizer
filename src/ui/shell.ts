@@ -7,6 +7,8 @@ import type { InkStudio, StudioView } from '../studio/studio';
 import { renderControls, type ControlActions } from './controls';
 import { renderHud, renderPreparing, renderStatusPill, renderTelemetry } from './hud';
 import { renderRail } from './rail';
+import { renderPaintingStage } from './paint';
+import { renderViewer, type ViewerModel } from './viewer';
 import { createSectionStore, isSectionId } from './sections';
 import type { UiPrefsStore } from './prefs';
 import { applyTheme, otherTheme } from './theme';
@@ -31,6 +33,8 @@ export interface ShellActions extends ControlActions {
   pauseFilm(): void;
   resumeFilm(): void;
   enterManual(): void;
+  /** Empties the last run's leavings - the blots, the log, the recording. */
+  clearSession(): void;
 }
 
 export interface ShellElements {
@@ -41,6 +45,10 @@ export interface ShellElements {
   hud: HTMLElement;
   /** The element that carries the film; double-clicking it goes fullscreen. */
   film: HTMLElement;
+  /** Where a blot's own painting plays, large, while the rail is warming up. */
+  painting: HTMLElement;
+  /** The full-screen blot viewer, filled from the rail on demand. */
+  viewer: HTMLElement;
   /** The pre-flight overlay, drawn over the film while blots are prepared. */
   preparing: HTMLElement;
   /** The scrolling column; holds telemetry and the control body. */
@@ -49,6 +57,8 @@ export interface ShellElements {
   controlBody: HTMLElement;
   telemetry: HTMLElement;
   preflight: HTMLElement;
+  /** The column transient notices stack in: top right, out of the flow. */
+  toasts: HTMLElement;
 }
 
 /** Reads a DOM input into the shape the actions expect. */
@@ -61,6 +71,12 @@ function readValue(element: HTMLElement): string | boolean | number {
   if (element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) return element.value;
   return '';
 }
+
+/**
+ * The film is the picture: while one of these is the status, the stage belongs to
+ * the live stream and not to a take being replayed.
+ */
+const FILM_STATUSES = new Set(['preflight', 'connecting', 'live', 'chaining']);
 
 const CAMERA_MOVE_SET = new Set([
   'orbit-right', 'orbit-left', 'push-in', 'pull-back', 'crane-up', 'fly-over', 'slow-drift',
@@ -79,6 +95,14 @@ export class StudioShell {
   private lastAlertId = 0;
   /** Which sidebar sections are open: read once on load, written through on toggle. */
   private readonly sections = createSectionStore();
+  /** The blot whose picture is open in the viewer, or null when it is closed. */
+  private zoomedBlotId: string | null = null;
+  /** The poster on screen, kept with its blob so Download saves what is shown. */
+  private poster: { blob: Blob; url: string; filename: string } | null = null;
+  /** The finished take playing back on the stage, or null when none is. */
+  private replay: { url: string; index: number } | null = null;
+  /** The one-shot listener that reports a take this browser cannot play. */
+  private replayError: (() => void) | null = null;
 
   constructor(
     private readonly elements: ShellElements,
@@ -98,8 +122,17 @@ export class StudioShell {
     // `toggle` does not bubble, so the capture phase is what hears the sections
     // in the settings column open and close
     elements.controls.addEventListener('toggle', (event) => this.onSectionToggle(event), true);
-    elements.telemetry.addEventListener('click', (event) => this.onClick(event));
+    // `#telemetry` lives *inside* `#controls`, so a click in it already bubbles
+    // through the listener above: a second one here fired every handler twice,
+    // which is what made one Download click save two files.
     elements.topbar.addEventListener('click', (event) => this.onClick(event));
+    // the blot cards are not controls: they open their own picture
+    elements.rail.addEventListener('click', (event) => this.onBlotClick(event));
+    elements.filmstrip.addEventListener('click', (event) => this.onBlotClick(event));
+    elements.viewer.addEventListener('click', (event) => this.onViewerClick(event));
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && this.viewerOpen) this.closeViewer();
+    });
     // double-click the picture for fullscreen, the way a video player behaves
     elements.film.addEventListener('dblclick', () => void this.toggleFullscreen());
   }
@@ -144,7 +177,9 @@ export class StudioShell {
       case 'fullscreen': void this.toggleFullscreen(); break;
       case 'download': this.download(Number(button.dataset.index ?? 0)); break;
       case 'share': void this.copyShare(); break;
-      case 'poster': void this.downloadPoster(); break;
+      case 'clear': this.endReplay(); this.actions.clearSession(); break;
+      case 'poster': void this.viewPoster(); break;
+      case 'play-recording': this.replayRecording(Number(button.dataset.index ?? 0)); break;
       case 'show-controls': this.setWatch(false); break;
       case 'mute': this.toggleSound(); break;
       case 'theme': this.toggleTheme(); break;
@@ -219,6 +254,134 @@ export class StudioShell {
     }
   }
 
+  /** Opens a blot's own picture, full screen, with everything the run knows. */
+  private onBlotClick(event: Event): void {
+    const card = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-zoom]');
+    const id = card?.dataset.zoom;
+    if (!id) return;
+    this.zoomedBlotId = id;
+    this.renderViewer();
+  }
+
+  /** True while the overlay is showing something. */
+  private get viewerOpen(): boolean {
+    return this.zoomedBlotId !== null || this.poster !== null;
+  }
+
+  /** Closes the overlay, and with the poster goes the object URL it was shown from. */
+  private onViewerClick(event: Event): void {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-action]');
+    switch (button?.dataset.action) {
+      case 'close-viewer': this.closeViewer(); break;
+      case 'download-poster': this.savePoster(); break;
+      default: break;
+    }
+  }
+
+  private closeViewer(): void {
+    this.zoomedBlotId = null;
+    if (this.poster) {
+      URL.revokeObjectURL(this.poster.url);
+      this.poster = null;
+    }
+    this.renderViewer();
+  }
+
+  /**
+   * Redraws the viewer, and closes it when its blot is no longer on the rail -
+   * a cleared session or a fresh run must not leave a picture of a blot that
+   * does not exist hanging over the film.
+   */
+  private renderViewer(): void {
+    const blot = this.zoomedBlotId === null
+      ? null
+      : this.studio.view.rail.find((item) => item.id === this.zoomedBlotId) ?? null;
+    if (!blot) this.zoomedBlotId = null;
+    const model: ViewerModel | null = this.poster
+      ? { kind: 'poster', url: this.poster.url, filename: this.poster.filename }
+      : blot ? { kind: 'blot', blot } : null;
+    renderViewer(this.elements.viewer, model);
+  }
+
+  /**
+   * Composes the run's poster and puts it on screen.
+   *
+   * The poster is a still of everything the rail has, composed at the same 16:9
+   * as the stream, and it used to go straight to the downloads folder - so the
+   * only way to see what the run looked like as a poster was to save a file and
+   * open it elsewhere. Composing it is free and takes a moment, so it is shown
+   * first and saved from inside the viewer.
+   */
+  private async viewPoster(): Promise<void> {
+    let blob: Blob;
+    try {
+      blob = await renderPoster(this.studio.view, this.getSettings());
+    } catch (error) {
+      this.toast(error instanceof Error ? error.message : 'the poster failed', 'error');
+      return;
+    }
+    const filename = `ink-film-poster-${this.getSettings().ink.seed}.png`;
+    // a second Poster click composes a fresh one: the old URL must be let go
+    this.closeViewer();
+    this.poster = { blob, url: URL.createObjectURL(blob), filename };
+    this.renderViewer();
+  }
+
+  /** Writes the poster that is on screen. Nothing else in the viewer is saved. */
+  private savePoster(): void {
+    if (!this.poster) return;
+    downloadBlob(this.poster.blob, this.poster.filename);
+    this.toast(`Saved ${this.poster.filename}`);
+  }
+
+  /**
+   * Plays a finished take back on the stage.
+   *
+   * A session's stream dies with the session, so once the film is over the
+   * picture element has nothing left to show and the take the run just paid for
+   * exists only as a file in the telemetry column. Playing it back is the same
+   * element pointed at that file instead of at the stream, which is what keeps
+   * the stage, fullscreen and the sound button working exactly as they did while
+   * the film was live. It loops, because a take is short and a still frame with
+   * a Play button is how a run looks like it failed.
+   */
+  private replayRecording(index: number): void {
+    const { parts, result } = this.studio.view.recording;
+    const chosen = parts[index] ?? result;
+    const player = this.elements.app.querySelector('video');
+    if (!chosen || !player) return;
+    const url = URL.createObjectURL(chosen.blob);
+    this.endReplay();
+    this.replay = { url, index };
+    // the stream is closed: clearing it is what lets `src` be the thing playing
+    player.srcObject = null;
+    player.poster = '';
+    player.src = url;
+    player.loop = true;
+    // A take this browser cannot decode would otherwise leave a black stage and
+    // no explanation, which reads as a broken app rather than an old container.
+    this.replayError = () => this.toast('this browser cannot play that take back — download the file instead', 'error');
+    player.addEventListener('error', this.replayError, { once: true });
+    void player.play().catch(() => this.toast('press play on the film to start the take'));
+  }
+
+  /** Gives the stage back to the live session and lets the take's file go. */
+  private endReplay(): void {
+    if (!this.replay) return;
+    const { url } = this.replay;
+    this.replay = null;
+    const player = this.elements.app.querySelector('video');
+    if (player) {
+      if (this.replayError) player.removeEventListener('error', this.replayError);
+      player.pause();
+      player.removeAttribute('src');
+      player.loop = false;
+      player.load();
+    }
+    this.replayError = null;
+    URL.revokeObjectURL(url);
+  }
+
   private toggleCameraMove(move: string): void {
     if (!CAMERA_MOVE_SET.has(move)) return;
     const current = this.getSettings().camera.moves;
@@ -243,15 +406,6 @@ export class StudioShell {
     const extension = chosen.container === 'mp4' ? 'mp4' : chosen.container === 'webm' ? 'webm' : 'bin';
     const suffix = parts.length > 1 ? `-part-${index + 1}` : '';
     downloadBlob(chosen.blob, `ink-film-${this.getSettings().ink.seed}${suffix}.${extension}`);
-  }
-
-  private async downloadPoster(): Promise<void> {
-    try {
-      const blob = await renderPoster(this.studio.view, this.getSettings());
-      downloadBlob(blob, `ink-film-poster-${this.getSettings().ink.seed}.png`);
-    } catch (error) {
-      this.toast(error instanceof Error ? error.message : 'the poster failed');
-    }
   }
 
   /** Spectator mode: no configuration, just the film on a screen. */
@@ -310,12 +464,31 @@ export class StudioShell {
     }
   }
 
+  /**
+   * A notice that comes and goes, in the top right corner.
+   *
+   * Transient things - a stalled rail, a copied link - must not be pinned into
+   * the page, where a message about a condition that has already passed sits
+   * under the bar for the rest of the run. The bar's height is measured rather
+   * than assumed, because it wraps to two rows on a narrow window and a notice
+   * that lands behind the buttons is worse than none.
+   */
   private toast(message: string, kind: 'info' | 'warn' | 'error' = 'info'): void {
+    const host = this.elements.toasts;
     const node = document.createElement('div');
     node.className = `toast toast-${kind}`;
     node.textContent = message;
-    this.elements.app.appendChild(node);
-    setTimeout(() => node.remove(), kind === 'info' ? 4000 : 7000);
+    host.style.setProperty('--toast-top', `${Math.round(this.elements.topbar.getBoundingClientRect().height) + 12}px`);
+    host.appendChild(node);
+    // oldest first out, so a burst does not stack past the edge of the window
+    while (host.childElementCount > 4) host.firstElementChild?.remove();
+    setTimeout(() => this.dismissToast(node), kind === 'info' ? 4000 : 7000);
+  }
+
+  /** Fades a notice out before taking it out of the page. */
+  private dismissToast(node: HTMLElement): void {
+    node.classList.add('toast-leaving');
+    setTimeout(() => node.remove(), 240);
   }
 
   /** Shows every alert the studio has queued since the last render. */
@@ -369,8 +542,25 @@ export class StudioShell {
     renderRail(this.elements.rail, view);
     renderRail(this.elements.filmstrip, view, { compact: true });
     renderHud(this.elements.hud, view);
+    // The rail is not always on screen - a narrow window hides it and the strip
+    // below 1080px used to never show - so the blot being painted is shown large
+    // over the stage while the film has no picture yet. Once the film is live the
+    // picture itself is the thing to watch and this steps out of the way.
+    const preparing = view.status === 'preflight' || view.status === 'connecting';
+    const painting = preparing
+      ? view.rail.find((blot) => blot.painting && (blot.paint?.length ?? 0) > 0) ?? null
+      : null;
+    renderPaintingStage(
+      this.elements.painting,
+      painting?.paint ? { id: painting.id, paint: painting.paint } : null,
+    );
+    // A replay belongs to a run that is over: the moment a new session opens, or
+    // the next pre-flight starts warming the rail, the element has to be free for
+    // the live stream again.
+    if (this.replay && FILM_STATUSES.has(view.status)) this.endReplay();
     renderPreparing(this.elements.preparing, view);
-    renderTelemetry(this.elements.telemetry, view);
+    this.renderViewer();
+    renderTelemetry(this.elements.telemetry, view, this.replay?.index ?? null);
     this.renderControlsIfNeeded(view, settings);
     this.renderPreflight(view, health);
     this.renderAlerts(view);
@@ -441,11 +631,23 @@ export class StudioShell {
       : `<button class="primary" data-action="start" ${view.status === 'preflight' ? 'disabled' : ''}>
            Start the film <span class="muted">≈${usd(estimate.totalUsd)} up to ${minutesLabel(this.getSettings().budget.sessionCapSeconds)}</span>
          </button>
-         <button class="secondary" data-action="poster" ${view.rail.length > 0 ? '' : 'disabled'}>Poster</button>
+         <button class="secondary" data-action="poster" ${view.rail.length > 0 ? '' : 'disabled'}
+                 title="Compose this run's poster and look at it before saving anything">Poster</button>
+         <button class="ghost" data-action="clear" ${this.nothingToClear(view) ? 'disabled' : ''}
+                 title="Clear the last session's blots, log and recording. Every setting is kept.">Clear</button>
          ${fullscreen}
          ${theme}
          ${sound}
          <button class="ghost" data-action="manual">Paint one myself</button>`;
+  }
+
+  /** True while the last session has left nothing behind to clear. */
+  private nothingToClear(view: StudioView): boolean {
+    return view.rail.length === 0
+      && view.recording.parts.length === 0
+      && view.recording.result === null
+      && view.log.length === 0
+      && view.warnings.length === 0;
   }
 
   private renderPreflight(view: StudioView, health: HealthResponse | null): void {

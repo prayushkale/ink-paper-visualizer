@@ -377,7 +377,7 @@ describe('InkStudio', () => {
     const first = prompts[0]!;
     expect(first.prompt_version).toBe(2);
     expect(String(first.end_image_url)).toMatch(/^https:\/\/fal\.media\//);
-    expect(String(first.prompt)).toMatch(/Preserve the paper-and-pigment surface/);
+    expect(String(first.prompt)).toMatch(/Preserve the live-action photographic look/);
   });
 
   it('describes the blot in every direction, not just an image', async () => {
@@ -455,6 +455,9 @@ describe('InkStudio', () => {
   });
 
   it('sends a new prompt_version for every direction across a chain', async () => {
+    // the chained session dispatches straight away, because the pre-flight left
+    // it a rail with ready blots on it: its versions have to keep climbing where
+    // the last session stopped rather than start again at 2
     const h = harness();
     await goLive(h);
     h.transport.server(chunk({ chunk_index: 0 }));
@@ -477,6 +480,81 @@ describe('InkStudio', () => {
     // the policy itself is covered in chain.test.ts; here the reverse switch is wired
     h.studio.updateSettings({ stream: { ...h.settings.stream, autoChain: false } });
     expect(h.settings.stream.autoChain).toBe(false);
+  });
+
+  it('drops the blots that never reached the screen when the run stops', async () => {
+    // The hold starts only once the film is live: the pre-flight has to carry
+    // three blots all the way through, so a port hung earlier would stall the
+    // start rather than leave a blot mid-pipeline.
+    let hang = false;
+    const held = deferred();
+    const h = harness({
+      ports: {
+        upload: async (_blob, name) => {
+          if (hang) await held.promise;
+          return `https://fal.media/${name}`;
+        },
+      },
+    });
+    await goLive(h);
+    hang = true;
+    h.studio.enqueueHandmade(
+      inkRecipeFromSeed({ seed: 999_001, canvas: h.settings.ink.canvas, tools: h.settings.ink.tools, folds: 'auto' }),
+      undefined,
+      'data:image/jpeg;base64,hand-painted',
+    );
+    await flush();
+    h.timer.beat();
+    await flush();
+    h.timer.beat();
+    await flush();
+    // the blot is being hosted and has not been read: this is the card that used
+    // to sit on "waiting for the vision model" long after the film had stopped
+    const stranded = h.studio.view.rail.filter((blot) => blot.subject === null);
+    expect(stranded.length).toBeGreaterThan(0);
+    // measured here rather than before the blot joined: the pre-flight hands the
+    // film a rail that is all ready blots, so the blot still in the pipeline at
+    // the stop is the hand-made one, not a leavings of the warm-up
+    const before = h.studio.view.rail.length;
+
+    await h.studio.stop();
+    const after = h.studio.view.rail;
+    expect(after.every((blot) => blot.subject !== null)).toBe(true);
+    expect(after.length).toBeLessThan(before);
+    expect(after.map((blot) => blot.id)).not.toContain(stranded[0]!.id);
+    held.release();
+  });
+
+  it('clears the last session and leaves every setting exactly as it was', async () => {
+    const h = harness();
+    await goLive(h);
+    h.transport.server(chunk());
+    await h.studio.stop();
+    const settingsBefore = structuredClone(h.settings);
+    expect(h.studio.view.rail.length).toBeGreaterThan(0);
+    expect(h.studio.view.log.length).toBeGreaterThan(0);
+
+    expect(h.studio.clearSession()).toBe(true);
+
+    const view = h.studio.view;
+    expect(view.rail).toHaveLength(0);
+    // the log keeps exactly one line: the note that it was cleared
+    expect(view.log).toHaveLength(1);
+    expect(view.log[0]!.text).toMatch(/cleared the last session/);
+    expect(view.warnings).toHaveLength(0);
+    expect(view.recording.parts).toHaveLength(0);
+    expect(view.recording.result).toBeNull();
+    expect(view.status).toBe('idle');
+    expect(h.settings).toEqual(settingsBefore);
+  });
+
+  it('refuses to clear while the film is still running', async () => {
+    const h = harness();
+    await goLive(h);
+    const onRail = h.studio.view.rail.length;
+    expect(h.studio.clearSession()).toBe(false);
+    expect(h.studio.view.status).toBe('live');
+    expect(h.studio.view.rail.length).toBe(onRail);
   });
 
   it('adopts a hand-painted blot at the front of the rail', async () => {
@@ -757,6 +835,13 @@ describe('InkStudio over a long run', () => {
     expect(h.studio.status).toBe('live');
     // the rail genuinely ran out, which is exactly the condition being survived
     expect(h.studio.view.log.map((line) => line.text).join(' ')).toMatch(/rail ran dry|Continue/);
+    // and it is reported as a notice that comes and goes rather than as a note
+    // pinned under the bar: the log keeps every stall, the toast is rate-limited
+    expect(h.studio.view.log.filter((line) => /rail ran dry/i.test(line.text)).length).toBeGreaterThan(1);
+    expect(h.studio.view.warnings).toHaveLength(0);
+    const notices = h.studio.view.alerts.filter((alert) => /rail ran dry/i.test(alert.text));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.kind).toBe('warn');
   });
 
   it('chains rather than dying when the server keeps ending sessions', async () => {

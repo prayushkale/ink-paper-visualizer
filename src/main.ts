@@ -132,11 +132,14 @@ const elements: ShellElements = {
   filmstrip: document.getElementById('filmstrip')!,
   hud: document.getElementById('hud')!,
   film: document.getElementById('film')!,
+  painting: document.getElementById('painting')!,
+  viewer: document.getElementById('viewer')!,
   preparing: document.getElementById('preparing')!,
   controls: document.getElementById('controls')!,
   controlBody: document.getElementById('control-body')!,
   telemetry: document.getElementById('telemetry')!,
   preflight: document.getElementById('notes')!,
+  toasts: document.getElementById('toasts')!,
 };
 
 let manual: ReturnType<typeof mountManual> | null = null;
@@ -193,6 +196,7 @@ const shell: StudioShell = new StudioShell(
       });
     },
     stop: () => void studio.stop(),
+    clearSession: () => void studio.clearSession(),
     pauseFilm: () => studio.pauseFilm(),
     resumeFilm: () => studio.resumeFilm(),
     enterManual: () => setMode('manual'),

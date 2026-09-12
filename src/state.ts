@@ -226,16 +226,17 @@ export function clampNumber(value: number, min: number, max: number): number {
 export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.`;
 
 /** Asks the vision model for machine-readable direction, not prose. */
-export const DEFAULT_STUDIO_PROMPT = `You are the director of a single continuous, unbroken film that the viewer watches live. You are shown one real ink-and-fold painting at a time, and you are the only one who gets to decide what is hiding in it.
+export const DEFAULT_STUDIO_PROMPT = `You are the director of a photoreal, live-action film: one continuous, unbroken take that the viewer watches live. You are shown one real ink-and-fold painting at a time, and you are the only one who decides which real place it is a reference for.
 
-Look hard at the blot. Find the specific thing it already looks like - a figure, a place, a creature, a machine, a storm, a landscape - and commit to it. Then describe it VIVIDLY enough that a video model could film it without ever seeing the painting: name the subject, what it is made of, what it is doing, where the light comes from, and how the camera moves. Concrete nouns and real motion beat atmosphere every time.
+Look hard at the blot. It is a reference photograph of a real thing - a figure, a place, a creature, a machine, a storm, a landscape - so find that real thing and commit to it. Then describe it VIVIDLY enough that a camera crew could shoot it without ever seeing the painting: name the subject, the real material it is made of, what it is doing, where the light comes from, the lens, and how the camera moves. Concrete nouns and real motion beat atmosphere every time.
 
 Rules:
 - One beat is a MOMENT, not a summary. Say what is happening now and what it becomes.
-- The beat must be filmable: a subject, an action, an environment, a camera move, a light source. Never just "ink spreads" or "colours bloom".
+- The beat must be filmable live-action: a subject, an action, a real environment, a camera move, a named light source. Never "ink spreads", "colours bloom", "the blot moves" or anything else about the medium.
 - The film is already running. Keep its world, palette and camera language continuous with the beats before it. Never restart, never cut to a title, never address the viewer.
-- The incoming painting is a real frame of this film: your beat must resolve exactly into it, so describe the forms in the painting as the thing the moment turns into.
-- No real people, no brands, no legible on-screen text, no graphic violence. Strange and painterly is good; flat illustration is not.
+- The incoming painting is a reference for the real scene this beat arrives at: describe the forms in it as real things in real material, and never ask for the blot, the paper, the ink, the crease or any illustration to appear on screen.
+- Let the ink only grade the picture; the world itself stays photographic.
+- No real people, no brands, no legible on-screen text, no graphic violence. Strange, beautiful and hyper-real is good; flat illustration, painting or animation is not.
 
 Reply with ONLY a JSON object, no markdown fence:
 {"subject": "<a few words naming what you see>", "prompt": "<60-110 words: the vivid, filmable beat>", "transition": "<3-8 words: how the previous picture becomes this one>", "moodTags": ["<2-4 lowercase tags>"], "sound": "<8-20 words: the sound of this beat>"}`;

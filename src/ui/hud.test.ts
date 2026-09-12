@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderPreparing } from './hud';
+import { renderPreparing, renderTelemetry } from './hud';
 import type { StudioView } from '../studio/studio';
 
 /** Enough of an element for the renderers: they only set `hidden` and `innerHTML`. */
@@ -64,5 +64,55 @@ describe('renderPreparing', () => {
     const el = root();
     renderPreparing(el, view(progress({ stage: 'stalled', working: 0, failed: 4 })));
     expect(el.innerHTML).toContain('the rail is struggling');
+  });
+});
+
+/**
+ * The recording block is the only place a finished take exists, so the button
+ * that plays one back has to say whether it is the take on screen right now.
+ */
+function recordingView(overrides: Partial<StudioView['recording']> = {}): StudioView {
+  const part = { blob: {} as Blob, mime: 'video/webm', container: 'webm' as const, durationMs: 64_000, bytes: 2_048_000, remuxed: false };
+  return {
+    recording: { state: 'idle', container: 'webm', durationMs: 64_000, bytes: 2_048_000, result: part, parts: [part], ...overrides },
+    spend: { dryRun: false, sessionUsd: 1, todayUsd: 2, sessionCapUsd: 5, dailyCapUsd: 10, remainingSessionSeconds: 60 },
+    session: { generatedSeconds: 30, bufferSeconds: 4, chunkIndex: 2, route: 'fal', buffering: false, promptVersion: 1, elapsedSeconds: 30, chunks: 3 },
+    chain: { sessions: 1, chains: 0, failures: 0, maxChains: 5 },
+    capabilities: { ffmpeg: true, sessionMaxSeconds: null, oneSessionPerMachine: true },
+    log: [],
+    warnings: [],
+  } as unknown as StudioView;
+}
+
+describe('renderTelemetry', () => {
+  it('offers a playback beside the file for every finished take', () => {
+    const el = root();
+    renderTelemetry(el, recordingView());
+    expect(el.innerHTML).toContain('data-action="play-recording" data-index="0"');
+    expect(el.innerHTML).toContain('Play <span class="muted">· 1m 04s</span>');
+    expect(el.innerHTML).toContain('data-action="download"');
+  });
+
+  it('reads as pressed for the take that is on screen', () => {
+    const el = root();
+    renderTelemetry(el, recordingView(), 0);
+    expect(el.innerHTML).toContain('Stop <span class="muted">· 1m 04s</span>');
+    expect(el.innerHTML).toContain('class="danger"');
+    expect(el.innerHTML).toContain('Playing this take on the stage');
+  });
+
+  it('says nothing about playback while nothing is playing', () => {
+    const el = root();
+    renderTelemetry(el, recordingView(), null);
+    expect(el.innerHTML).not.toContain('Playing this take');
+  });
+
+  it('lists every part of a run that was paused and resumed', () => {
+    const el = root();
+    const first = recordingView().recording.parts[0]!;
+    renderTelemetry(el, recordingView({ parts: [first, { ...first, bytes: 4096 }] }), 1);
+    expect(el.innerHTML).toContain('data-index="0"');
+    expect(el.innerHTML).toContain('data-index="1"');
+    expect(el.innerHTML).toContain('part 2');
   });
 });

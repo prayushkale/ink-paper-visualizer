@@ -63,6 +63,15 @@ export interface DirectorSessionOptions {
   schedule?: Timer;
   pingIntervalMs?: number;
   now?: () => number;
+  /**
+   * The run's prompt-version counter, shared across every chained session.
+   *
+   * A session of its own would start again at 2, and a chained session sends its
+   * first direction immediately - the rail it inherits is full - so the server
+   * would see a version it had already been given. The counter belongs to the
+   * film, not to the connection. Omit it and the session keeps its own.
+   */
+  versions?: PromptVersions;
 }
 
 /**
@@ -75,7 +84,7 @@ export interface DirectorSessionOptions {
  */
 export class DirectorSession {
   private connection: DirectorConnection | null = null;
-  private readonly versions = new PromptVersions();
+  private readonly versions: PromptVersions;
   private statusValue: StudioStatus = 'idle';
   private pingHandle: unknown = null;
   private stopped = false;
@@ -107,6 +116,7 @@ export class DirectorSession {
   constructor(private readonly options: DirectorSessionOptions) {
     this.events = options.events ?? {};
     this.now = options.now ?? (() => Date.now());
+    this.versions = options.versions ?? new PromptVersions();
   }
 
   get status(): StudioStatus {

@@ -2,7 +2,8 @@ import { CAMERA_MOVES, type CameraMoveId } from '../presets/camera';
 import type { StudioView, BlotView } from '../studio/studio';
 import { paintReelMarkup, reelIsPlaying } from './paint';
 
-const STATE_LABEL: Record<string, string> = {
+/** What each pipeline state is called on a card, in the rail's own words. */
+export const BLOT_STATE_LABEL: Record<string, string> = {
   painting: 'painting',
   invented: 'inventing',
   rendered: 'painted',
@@ -33,15 +34,17 @@ export function blotCard(blot: BlotView, currentId: string | null): string {
       </span>`)
     .join('');
   return `
-    <article class="blot ${state} ${isCurrent ? 'current' : ''}">
+    <article class="blot ${state} ${isCurrent ? 'current' : ''}" data-zoom="${esc(blot.id)}">
       <div class="blot-thumb">
-        ${blot.thumb ? `<img src="${blot.thumb}" alt="ink blot ${blot.seed}" loading="lazy" />` : '<div class="skeleton"></div>'}
+        <button class="blot-zoom" type="button" data-zoom="${esc(blot.id)}" title="Open this blot full screen">
+          ${blot.thumb ? `<img src="${blot.thumb}" alt="ink blot ${blot.seed}" loading="lazy" />` : '<div class="skeleton"></div>'}
+        </button>
         ${blot.paint ? paintReelMarkup(blot.paint) : ''}
         ${isCurrent ? '<span class="now">on screen</span>' : ''}
       </div>
       <div class="blot-body">
         <div class="blot-head">
-          <span class="chip state-${blot.painting ? 'invented' : blot.state}">${esc(STATE_LABEL[state] ?? state)}</span>
+          <span class="chip state-${blot.painting ? 'invented' : blot.state}">${esc(BLOT_STATE_LABEL[state] ?? state)}</span>
           ${blot.handmade ? '<span class="chip handmade">hand-painted</span>' : ''}
           <span class="seed">#${blot.seed}</span>
         </div>

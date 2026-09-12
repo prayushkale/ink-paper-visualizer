@@ -21,6 +21,28 @@ export function paintReelMarkup(frames: readonly PaintFrame[]): string {
 }
 
 /**
+ * The blot being painted, shown at stage size instead of thumbnail size.
+ *
+ * The rail is a 300px column that a narrow window hides altogether, and the
+ * pre-flight is a minute or two with no picture to show for it: the painting is
+ * the one thing worth watching while it happens, so the same frames that play on
+ * a card play large over the stage. `key` is the show, so a heartbeat that
+ * rewrites the markup cannot restart a painting that is still running.
+ */
+export function renderPaintingStage(root: HTMLElement, blot: { id: string; paint: PaintFrame[] } | null): void {
+  const frames = blot?.paint ?? null;
+  if (!blot || !frames || frames.length === 0) {
+    reelIsPlaying(root, '');
+    root.hidden = true;
+    root.innerHTML = '';
+    return;
+  }
+  if (reelIsPlaying(root, `${blot.id}:${frames.length}:${frames[0]!.at}`)) return;
+  root.hidden = false;
+  root.innerHTML = paintReelMarkup(frames);
+}
+
+/**
  * What each element is currently playing, so a repaint can leave it alone.
  *
  * A painting is a CSS animation over markup the shell rebuilds on a heartbeat.

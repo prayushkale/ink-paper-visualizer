@@ -159,8 +159,14 @@ the gate if an acknowledgement never comes.
 resumed once stopped), finalises the recording, and keeps the frozen frame. Play
 opens a fresh session on that exact frame and starts a new recording part, so a
 paused film costs a new session minimum when it resumes. Because a session cannot
-be rejoined, **each pause produces its own downloadable file** — the telemetry
-lists every part. **Double-click the film** for fullscreen.
+be rejoined, **each pause produces its own file** — the telemetry lists every
+part, each with a **Play** that puts that take back on the stage on a loop (a
+session's stream dies with the session, so before that button existed a finished
+run left nothing to watch) and a **Download**. **Poster** composes the run's
+still and shows it full screen first; the file is only written by the Download
+button inside that viewer. **Double-click the film** for fullscreen. A blot on
+the rail opens full screen when it is clicked, with its reading and its camera
+takes.
 
 A **share link** reproduces a run — recipe, mood, music, camera and budget — from
 a URL. `#watch=1` hides the configuration so the film can sit on a screen.
@@ -183,7 +189,8 @@ with the moov atom at the front, which is what a social platform will accept.
 
 Nothing is recorded until a session goes live. A `MediaRecorder` is bound to one
 stream, so the recording spans exactly one session: a chained or paused run
-exports one part per session, each offered separately for download.
+exports one part per session, each offered separately to play back on the stage
+or to download.
 
 ---
 
@@ -223,7 +230,7 @@ src/angle/                 Multi Angle payload builder, final-pose frame grab
 src/stream/                wire protocol, session, scheduler, chaining, budget
 src/record/                MediaRecorder wrapper with an mp4-first fallback
 src/studio/                the orchestrator and its browser wiring
-src/ui/                    rail, HUD, controls, shell, poster, manual mode
+src/ui/                    rail, HUD, controls, shell, poster, viewer, manual mode
 ```
 
 ## Testing
@@ -250,7 +257,7 @@ protect money and continuity:
 |---|---|
 | "Not ready: FAL_KEY" | Missing from `.env`; restart `npm run dev`. |
 | The film starts then stops at ~2 minutes | The server declared a session ceiling, or the `low` quality preset's own 60s cap is in force. Leave auto-chaining on, or pick a longer preset. |
-| "the rail ran dry" | The vision model is slow or failing. The film continues without new blots. |
+| "The rail ran dry" (a notice in the top right, once a minute at most) | The rail fell behind the film: a blot takes longer to prepare than its views take to play, so the film runs on its own momentum for a beat or two. It clears itself, and every occurrence is in the log. |
 | Start sits on "preparing the film" for a minute or two | The rail is painting, hosting, imagining and orbiting the first three blots before it spends anything. The overlay names the stage; Stop cancels it for free. |
 | A blot is dropped | Its upload, vision call or orbit failed twice. The rail invents another. |
 | "no bundled track at /assets/music/…" | The folder is empty, so the dev server answered with the app's HTML. The run falls back to a model-scored film: drop a file in `assets/music/`, paste a URL, or pick "Model scores it". |

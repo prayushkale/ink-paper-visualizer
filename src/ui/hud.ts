@@ -116,8 +116,16 @@ export function renderHud(root: HTMLElement, view: StudioView): void {
     ${view.session.buffering ? '<div class="hud-warn">the model fell behind playback and is catching up</div>' : ''}`;
 }
 
-/** Cost meters, chain state, recording, and the raw server log. */
-export function renderTelemetry(root: HTMLElement, view: StudioView): void {
+/**
+ * Cost meters, chain state, recording, and the raw server log.
+ *
+ * `replaying` is the index of the take the shell is playing back on the stage, or
+ * null when none is: the button that started it is the button that stops it, so
+ * it has to read as pressed for as long as the take is on screen. A session's
+ * stream dies with the session, so without a playback the only thing a finished
+ * run leaves is a file to download.
+ */
+export function renderTelemetry(root: HTMLElement, view: StudioView, replaying: number | null = null): void {
   const recording = view.recording;
   const remainingSeconds = view.spend.remainingSessionSeconds;
   // a paused session is finalised, so a run can be several files
@@ -164,10 +172,19 @@ export function renderTelemetry(root: HTMLElement, view: StudioView): void {
       ${parts.length === 0
         ? `<p class="muted">${recording.state === 'idle' ? 'nothing recorded yet' : 'the file appears here when you stop'}</p>`
         : `${parts.map((part, index) => `
-             <button class="primary" data-action="download" data-index="${index}">
-               Download ${part.remuxed ? 'mp4' : part.container}${parts.length > 1 ? ` · part ${index + 1}` : ''}
-               <span class="muted">· ${Math.round(part.bytes / 1024)} KB</span>
-             </button>`).join('')}
+             <div class="recording-row">
+               <button class="${replaying === index ? 'danger' : 'primary'}" data-action="play-recording" data-index="${index}"
+                       title="${replaying === index ? 'Take the take off the stage' : 'Play this take on the stage, over and over'}">
+                 ${replaying === index ? 'Stop' : 'Play'} <span class="muted">· ${formatDuration(part.durationMs)}</span>
+               </button>
+               <button class="secondary" data-action="download" data-index="${index}">
+                 Download ${part.remuxed ? 'mp4' : part.container}${parts.length > 1 ? ` · part ${index + 1}` : ''}
+                 <span class="muted">· ${Math.round(part.bytes / 1024)} KB</span>
+               </button>
+             </div>`).join('')}
+           ${replaying === null
+             ? ''
+             : '<p class="muted">Playing this take on the stage, on a loop. Start the film to go back to the live session.</p>'}
            ${view.capabilities.ffmpeg ? '' : '<p class="muted">ffmpeg was not found, so a webm cannot be converted to mp4 here.</p>'}`}
     </div>
 

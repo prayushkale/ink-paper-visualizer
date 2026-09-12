@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  PRESERVE_CLAUSE,
   clampPrompt,
   composeDirection,
   composeMoodShift,
@@ -58,6 +59,12 @@ describe('composeWorldPrompt', () => {
   it('states that every segment begins inside a real ink painting', () => {
     expect(world).toMatch(/STARTING FROM THE INK/);
     expect(world).toMatch(/real ink painting/);
+  });
+
+  it('builds the world out of real materials rather than ink and paper', () => {
+    expect(world).toMatch(/MATERIAL: real photography of a real place/);
+    expect(world).toMatch(/never the blot itself on screen/);
+    expect(world).toContain(PRESERVE_CLAUSE);
   });
 
   it('describes a pinned score as a condition, not a suggestion', () => {
@@ -150,7 +157,9 @@ describe('composeDirection', () => {
   });
 
   it('repeats the preserve instruction so continuity survives every beat', () => {
-    expect(direction).toMatch(/Preserve the paper-and-pigment surface/);
+    expect(direction).toContain(PRESERVE_CLAUSE);
+    // and it insists on photography: the ink is a reference, never the picture
+    expect(direction).toMatch(/photographic/);
   });
 
   it('carries the camera move so picture and words agree', () => {
