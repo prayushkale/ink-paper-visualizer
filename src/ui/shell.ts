@@ -437,7 +437,6 @@ export class StudioShell {
       : `<button class="primary" data-action="start" ${view.status === 'preflight' ? 'disabled' : ''}>
            Start the film <span class="muted">≈${usd(estimate.totalUsd)} up to ${minutesLabel(this.getSettings().budget.sessionCapSeconds)}</span>
          </button>
-         <button class="secondary" data-action="share">Copy share link</button>
          <button class="secondary" data-action="poster" ${view.rail.length > 0 ? '' : 'disabled'}>Poster</button>
          ${fullscreen}
          ${theme}
