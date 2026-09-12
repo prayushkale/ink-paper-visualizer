@@ -24,7 +24,7 @@ import { createFrameGrabber, type FrameGrabberPort } from '../stream/frameGrabbe
 import { composeWorldPrompt } from '../stream/promptComposer';
 import { DirectorSession, realTimer, type DirectorSessionEvents, type Timer } from '../stream/session';
 import { BlotScheduler, type SchedulerEpisode } from '../stream/scheduler';
-import { buildConfigure, type ChunkInfo, type SessionInfo } from '../stream/protocol';
+import { PromptVersions, buildConfigure, type ChunkInfo, type SessionInfo } from '../stream/protocol';
 import type { DirectorTransport } from '../stream/transport';
 import type { HealthResponse } from '../api/client';
 import type { SharedSettings } from '../share/recipe';
@@ -38,8 +38,29 @@ import type { SharedSettings } from '../share/recipe';
  */
 export const PREFLIGHT_WAIT_MS = 150_000;
 
+/**
+ * How long the pre-flight may spend filling the buffer past the one blot it
+ * needs to open.
+ *
+ * A blot costs about as much to prepare as three of its views take to play, so
+ * a run that opens on the single blot the first pump produced is out of blots
+ * inside its first minute and carries on without them. Waiting for the whole
+ * buffer is free - a warming rail bills nothing - but a run still has to start,
+ * so the wait for the rest of the buffer is bounded rather than open-ended.
+ */
+export const PREFLIGHT_BUFFER_MS = 60_000;
+
 /** How often the pre-flight overlay repaints while the rail warms up. */
 export const PREFLIGHT_TICK_MS = 500;
+
+/**
+ * How long a repeat of a transient notice stays quiet before it is shown again.
+ *
+ * The rail falling behind is a condition that comes and goes many times in one
+ * run - a blot takes longer to prepare than three of its views take to play - so
+ * a notice per occurrence would shout over the film. The log keeps every one.
+ */
+export const NOTICE_COOLDOWN_MS = 60_000;
 
 export interface LogLine {
   at: number;
@@ -190,6 +211,10 @@ export class InkStudio {
   private warnings: string[] = [];
   private alerts: StudioAlert[] = [];
   private alertSeq = 0;
+  /** When the last transient notice was toasted, for NOTICE_COOLDOWN_MS. */
+  private lastNoticeAt = 0;
+  /** Direction versions climb for the whole run, across every chained session. */
+  private versions = new PromptVersions();
   /** True while the user has paused the film; survives a chained session. */
   private pausedByUser = false;
   private lastChunk: ChunkInfo | null = null;
@@ -297,7 +322,7 @@ export class InkStudio {
           const blot = this.rail.find(blotId);
           if (blot) this.log('info', `done with ${blot.reading?.subject ?? blot.id}`);
         },
-        onStall: () => this.warn('the rail ran dry; the film is continuing on its own for a moment'),
+        onStall: () => this.notice('The rail ran dry; the film is continuing on its own for a moment.'),
         onWarning: (message) => this.warn(message),
       },
       now: () => this.now(),
@@ -526,6 +551,8 @@ export class InkStudio {
     this.failing = false;
     this.warnings = [];
     this.alerts = [];
+    this.lastNoticeAt = 0;
+    this.versions = new PromptVersions();
     this.pausedByUser = false;
     this.pausedFrameUrl = null;
     this.pauseWork = null;
@@ -534,7 +561,7 @@ export class InkStudio {
     this.recordingResult = null;
     this.setStatus('preflight');
     this.beginPreflight();
-    this.log('info', 'preparing the first blot');
+    this.log('info', 'preparing the first blots');
     try {
       await this.rail.pump();
       this.emit();
@@ -604,6 +631,10 @@ export class InkStudio {
     const session = this.session;
     this.session = null;
     await session?.stop();
+    // The run is over: blots that never reached the screen are leavings, not
+    // history. Left on the rail they keep claiming work - a card waiting on a
+    // vision call nobody is waiting for - so they go with the session.
+    this.rail.abandonUnfinished();
     this.setStatus('ended');
     this.emit();
   }
@@ -653,6 +684,8 @@ export class InkStudio {
     } catch {
       /* the peer is already gone; releasing it is what matters */
     }
+    // a failed run stops the rail with it: nothing was going to be delivered
+    this.rail.abandonUnfinished();
     // the session reports its own teardown as 'ended': this run did not end,
     // it failed, and that is what the person watching has to see
     this.setStatus('failed');
@@ -755,6 +788,61 @@ export class InkStudio {
         this.emit();
       }
     })();
+  }
+
+  /** True when the last run is over and its leavings can be cleared away. */
+  get clearable(): boolean {
+    return this.statusValue === 'idle' || this.statusValue === 'ended' || this.statusValue === 'failed';
+  }
+
+  /**
+   * Empties everything the last run left behind and keeps every setting.
+   *
+   * The rail, the log, the warnings, the recording and the picture frozen on the
+   * stage all belong to a run that is over; the mood, the seed, the caps and the
+   * camera are what the next run will be, so they stay exactly as they are.
+   * Refused while the film is running, because the rail is the pipeline feeding
+   * it and the recorder is writing to a live stream.
+   */
+  clearSession(): boolean {
+    if (!this.clearable) {
+      this.notify('warn', 'The film is still running: stop it before clearing the last session.');
+      this.emit();
+      return false;
+    }
+    this.rail.reset();
+    this.logLines = [];
+    this.warnings = [];
+    this.alerts = [];
+    this.lastNoticeAt = 0;
+    this.recordings = [];
+    this.recordingResult = null;
+    this.recorder.reset();
+    this.lastChunk = null;
+    this.bufferingUntil = 0;
+    this.openingPoster = null;
+    this.pausedFrameUrl = null;
+    this.pausedByUser = false;
+    this.pauseWork = null;
+    this.resuming = false;
+    this.failing = false;
+    this.startCancelled = false;
+    // the next run starts from the configured seed again, because the settings
+    // were never touched by any of this
+    this.seedCounter = 0;
+    this.idCounter = 0;
+    this.frameGrabber?.dispose();
+    this.frameGrabber = null;
+    this.stream = null;
+    if (this.videoElement) {
+      this.videoElement.srcObject = null;
+      this.videoElement.poster = '';
+    }
+    this.setStatus('idle');
+    this.log('info', 'cleared the last session; the settings are untouched');
+    this.notify('info', 'Cleared the last session. Every setting is untouched.');
+    this.emit();
+    return true;
   }
 
   /** Adopts a hand-painted blot into the film. */
@@ -977,6 +1065,7 @@ export class InkStudio {
       events,
       schedule: this.timer,
       now: () => this.now(),
+      versions: this.versions,
     });
     this.session = session;
     this.scheduler.reset();
@@ -1148,12 +1237,29 @@ export class InkStudio {
     }
   }
 
+  /**
+   * Waits for a ready blot, then gives the rail a bounded moment to fill the
+   * buffer the film is meant to start on.
+   *
+   * Opening the session on the single blot the first pump produced is what left
+   * the rail dry in the first minute of a run: a blot takes longer to render,
+   * host, read and orbit than three of its views take to play, so the film was
+   * through its opening blot before the next one was ready. The overlay promises
+   * the buffer (`preparedTarget` ready blots) all along, so the wait is for that
+   * - up to PREFLIGHT_BUFFER_MS of it, after which the run starts on whatever is
+   * ready rather than keeping the person waiting on an unlucky rail.
+   */
   private async waitForBlot(timeoutMs = PREFLIGHT_WAIT_MS): Promise<BlotJob | null> {
     const deadline = this.now() + timeoutMs;
+    const target = this.rail.target;
+    let bufferDeadline = 0;
     while (this.now() < deadline) {
       if (this.startCancelled) return null;
-      const next = this.rail.next();
-      if (next) return next;
+      const opening = this.rail.next();
+      if (opening) {
+        if (bufferDeadline === 0) bufferDeadline = this.now() + PREFLIGHT_BUFFER_MS;
+        if (this.rail.ready.length >= target || this.now() >= bufferDeadline) return opening;
+      }
       await this.sleep(250);
       await this.rail.pump();
       // a blot that was just painted starts playing straight away, rather than
@@ -1330,6 +1436,23 @@ export class InkStudio {
   private warn(text: string): void {
     this.log('warn', text);
     if (!this.warnings.includes(text)) this.warnings = [...this.warnings.slice(-9), text];
+  }
+
+  /**
+   * A condition the film covers for on its own: the rail ran dry, a direction
+   * was never confirmed.
+   *
+   * These clear themselves, so they are shown as a toast that comes and goes
+   * rather than as a note pinned under the bar - a pinned note kept claiming the
+   * rail was short of blots long after it had caught up, for the rest of the run.
+   * Every occurrence is logged; the toast is rate-limited by NOTICE_COOLDOWN_MS.
+   */
+  private notice(text: string): void {
+    this.log('warn', text);
+    const now = this.now();
+    if (now - this.lastNoticeAt < NOTICE_COOLDOWN_MS) return;
+    this.lastNoticeAt = now;
+    this.notify('warn', text);
   }
 
   /** Queues a one-shot message for the shell to show as a toast. */

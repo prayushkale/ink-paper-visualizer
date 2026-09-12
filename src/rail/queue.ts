@@ -193,6 +193,16 @@ export class BlotRail {
     return this.jobs.filter((job) => job.state === 'ready');
   }
 
+  /**
+   * Ready blots the rail is asked to hold ahead of the film.
+   *
+   * The pre-flight waits for this many before it opens a paid session, so it is
+   * the size of the buffer the film starts on.
+   */
+  get target(): number {
+    return this.options.preparedTarget;
+  }
+
   get failedCount(): number {
     return this.jobs.filter((job) => job.state === 'failed').length;
   }
@@ -290,6 +300,22 @@ export class BlotRail {
     this.jobs = [];
     this.readingsByRecipe.clear();
     this.invented = 0;
+  }
+
+  /**
+   * Drops every blot that never made it to the screen.
+   *
+   * A run that ends - at a cap, on a failure, at the user's stop - leaves the
+   * rail holding blots that were mid-pipeline: a render nobody will upload, a
+   * vision call nobody is waiting for. They are not history, they are the
+   * leavings of a stopped run, and a card still reading "waiting for the vision
+   * model" after the film is over claims work that is not happening. Anything
+   * the film actually arrived at - or could still arrive at - is kept, because
+   * that is what the run made.
+   */
+  abandonUnfinished(): void {
+    this.jobs = this.jobs.filter((job) =>
+      job.state === 'ready' || job.state === 'scheduled' || job.state === 'live' || job.state === 'passed');
   }
 
   /** Set by the plan-ahead scheduler so cached readings are not re-used across films. */

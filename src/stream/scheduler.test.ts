@@ -183,7 +183,7 @@ describe('BlotScheduler', () => {
     scheduler.tick();
     const prompt = String(s.sent[0]!.prompt);
     expect(prompt).toContain('blot 5');
-    expect(prompt).toMatch(/Preserve the paper-and-pigment surface/);
+    expect(prompt).toMatch(/Preserve the live-action photographic look/);
     expect(s.sent[0]!.replan).toBe(true);
   });
 
@@ -240,18 +240,42 @@ describe('BlotScheduler', () => {
 
   it('sends a continuation with no image once the rail has been dry for a while', () => {
     const empty = makeRail(0, false);
+    const stalls: number[] = [];
     const dry = new BlotScheduler({
       rail: empty, session: s.session, readEpisode: makeEpisode(), now: () => clock,
       stallTicksBeforeContinuation: 3,
+      events: { onStall: (info) => stalls.push(info.emptyTicks) },
     });
     for (let i = 0; i < 2; i++) {
       dry.tick();
       expect(s.sent, `tick ${i + 1} should still be silent`).toHaveLength(0);
+      expect(stalls, `tick ${i + 1} is not a stall yet`).toHaveLength(0);
     }
     dry.tick();
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0]!.end_image_url).toBeUndefined();
     expect(String(s.sent[0]!.prompt)).toMatch(/Continue the same take/);
+    // three ticks with nothing to send is the condition worth reporting
+    expect(stalls).toEqual([3]);
+  });
+
+  it('does not report a mood change as a dry rail', () => {
+    // A continuation also carries a mood change, and one of those is sent on the
+    // first tick - long before the rail has been given a chance to produce a
+    // blot. Saying the rail ran dry there told people the film was short of
+    // blots when the direction was their own mood change riding along.
+    const empty = makeRail(0, false);
+    const stalls: number[] = [];
+    const moody = new BlotScheduler({
+      rail: empty, session: s.session, readEpisode: makeEpisode(), now: () => clock,
+      stallTicksBeforeContinuation: 3,
+      events: { onStall: (info) => stalls.push(info.emptyTicks) },
+    });
+    moody.notifyMoodChanged(MOODS.menacing);
+    moody.tick();
+    expect(s.sent).toHaveLength(1);
+    expect(String(s.sent[0]!.prompt)).toMatch(/mood/i);
+    expect(stalls).toHaveLength(0);
   });
 
   it('folds a mood change into the next direction instead of opening a session', () => {
@@ -288,7 +312,7 @@ describe('BlotScheduler', () => {
     scheduler.tick();
     scheduler.onPromptRejected({ promptVersion: Number(s.sent[0]!.prompt_version), reason: 'content_policy' });
     scheduler.tick();
-    expect(String(s.sent[1]!.prompt)).toMatch(/Keep it abstract/);
+    expect(String(s.sent[1]!.prompt)).toMatch(/Keep it non-literal/);
     scheduler.onPromptRejected({ promptVersion: Number(s.sent[1]!.prompt_version), reason: 'content_policy' });
     expect(rail.find(blot.id)!.state).toBe('passed');
     expect(warnings.some((w) => /content_policy/.test(w))).toBe(true);
