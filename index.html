@@ -38,8 +38,6 @@
       <div class="top-actions" data-slot="actions"></div>
     </header>
 
-    <div id="notes"></div>
-
     <main>
       <aside id="rail" class="panel-rail" aria-label="Blots"></aside>
 
@@ -47,6 +45,9 @@
         <div id="film">
           <video id="player" playsinline autoplay></video>
           <div id="hud" hidden></div>
+          <!-- the transport over a take being replayed: a finished run has no
+               live stream, so this is the only way to pause or jump the picture -->
+          <div id="playback" hidden></div>
           <div id="preparing" hidden></div>
         </div>
         <div id="paper"></div>

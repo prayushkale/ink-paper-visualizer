@@ -132,13 +132,13 @@ const elements: ShellElements = {
   filmstrip: document.getElementById('filmstrip')!,
   hud: document.getElementById('hud')!,
   film: document.getElementById('film')!,
+  playback: document.getElementById('playback')!,
   painting: document.getElementById('painting')!,
   viewer: document.getElementById('viewer')!,
   preparing: document.getElementById('preparing')!,
   controls: document.getElementById('controls')!,
   controlBody: document.getElementById('control-body')!,
   telemetry: document.getElementById('telemetry')!,
-  preflight: document.getElementById('notes')!,
   toasts: document.getElementById('toasts')!,
 };
 
@@ -152,6 +152,9 @@ function setMode(next: 'studio' | 'manual'): void {
   const app = elements.app;
   if (next === 'manual') {
     app.dataset.mode = 'manual';
+    // the bar carries the way out of this mode, so it is redrawn straight away
+    // rather than waiting for the next studio emit
+    shell.refresh();
     void ensurePaper().then(() => {
       const host = document.getElementById('paper')!;
       scene?.resize(host);
@@ -200,6 +203,7 @@ const shell: StudioShell = new StudioShell(
     pauseFilm: () => studio.pauseFilm(),
     resumeFilm: () => studio.resumeFilm(),
     enterManual: () => setMode('manual'),
+    exitManual: () => setMode('studio'),
 
     setQuality: (id) => studio.updateSettings(applyQualityPreset(settings, id)),
     setMood: (id: MoodId) => studio.updateSettings({ moodId: id }),

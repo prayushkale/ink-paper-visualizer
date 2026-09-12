@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_BUDGET,
+  DEFAULT_VISION_PROMPT,
   DIRECTOR_RATE,
   QUALITY_PRESETS,
   applyQualityPreset,
@@ -18,7 +19,8 @@ import {
 } from './state';
 import { MOOD_IDS } from './presets/moods';
 import { MUSIC_IDS } from './presets/music';
-import { CAMERA_MOVE_IDS } from './presets/camera';
+import { CAMERA_MOVE_IDS, MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS } from './presets/camera';
+import { BLOT_MARKS } from './ink/recipe';
 
 const PROMO_DAY = new Date('2026-09-10T12:00:00Z');
 const LIST_DAY = new Date('2026-09-20T12:00:00Z');
@@ -168,7 +170,7 @@ describe('defaultSettings', () => {
     expect(settings.camera.enabled).toBe(false);
     expect(settings.camera.moves.every((move) => CAMERA_MOVE_IDS.includes(move))).toBe(true);
     expect(settings.budget).toEqual(DEFAULT_BUDGET);
-    expect(settings.ink.blotCount).toBeGreaterThan(0);
+    expect(settings.ink.blotCount).toBe(BLOT_MARKS);
     expect(settings.manualModeEnabled).toBe(true);
   });
 
@@ -297,6 +299,39 @@ describe('loadSettings / saveSettings', () => {
 
   it('ships the deepseek vision model by default', () => {
     expect(defaultSettings().openrouterModel).toBe('deepseek/deepseek-v4.1-flash');
+  });
+
+  it('asks the shipped imagining for a seven second clip that switches in a second', () => {
+    const prompt = defaultSettings().visionPrompt;
+    expect(prompt).toMatch(/no more than seven seconds long/);
+    expect(prompt).toMatch(/within the first second/);
+    expect(prompt).toMatch(/live-action/);
+  });
+
+  it('moves a stored copy of an old shipped prompt forward, and leaves a typed one alone', () => {
+    const storage = memoryStorage();
+    const shipped = defaultSettings();
+    // what this app used to ship, verbatim
+    shipped.visionPrompt =
+      'You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.';
+    saveSettings(shipped, storage);
+    expect(loadSettings(storage).visionPrompt).toBe(DEFAULT_VISION_PROMPT);
+
+    shipped.visionPrompt = 'look deeply at the stain';
+    saveSettings(shipped, storage);
+    expect(loadSettings(storage).visionPrompt).toBe('look deeply at the stain');
+  });
+
+  it('clamps a stored orbit length into the range a blot clip may use', () => {
+    const storage = memoryStorage();
+    const stored = defaultSettings();
+    stored.camera.duration = 15;
+    saveSettings(stored, storage);
+    expect(loadSettings(storage).camera.duration).toBe(MAX_ANGLE_SECONDS);
+
+    stored.camera.duration = 1;
+    saveSettings(stored, storage);
+    expect(loadSettings(storage).camera.duration).toBe(MIN_ANGLE_SECONDS);
   });
 
   it('migrates a stored superseded default model onto the current one', () => {

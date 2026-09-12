@@ -10,10 +10,17 @@ import {
   usd,
   type Settings,
 } from '../state';
-import { CAMERA_MOVES, CAMERA_MOVE_IDS, type CameraConfig, type CameraMoveId } from '../presets/camera';
+import {
+  CAMERA_MOVES,
+  CAMERA_MOVE_IDS,
+  MAX_ANGLE_SECONDS,
+  MIN_ANGLE_SECONDS,
+  type CameraConfig,
+  type CameraMoveId,
+} from '../presets/camera';
 import { MOODS, MOOD_IDS, type MoodId } from '../presets/moods';
 import { MUSIC_IDS, MUSIC_PRESETS, musicById, type MusicId } from '../presets/music';
-import { renderOps } from '../ink/recipe';
+import { BLOT_MARKS, MIN_BLOT_MARKS } from '../ink/recipe';
 import { orbitDiagram } from './rail';
 import type { StudioView } from '../studio/studio';
 
@@ -184,9 +191,10 @@ export function renderControls(
               <option value="${option}" ${camera.resolution === option ? 'selected' : ''}>${option}${option === '1080P' ? ' · upscaled from 768p' : ''}</option>`).join('')}
           </select>
         </label>
-        <label>Orbit length <span class="muted">${camera.duration}s</span>
-          <input type="range" min="5" max="15" value="${camera.duration}" data-input="camera.duration" />
+        <label>Orbit length <span class="muted">${camera.duration}s · seven at most</span>
+          <input type="range" min="${MIN_ANGLE_SECONDS}" max="${MAX_ANGLE_SECONDS}" value="${camera.duration}" data-input="camera.duration" />
         </label>
+        <p class="muted small">One clip per blot. It opens on the blot and the painting is over inside its first second, so the rest of it is the camera's move and nothing else.</p>
         <label class="check">
           <input type="checkbox" data-change="camera.repeatAngleCycle" ${camera.repeatAngleCycle ? 'checked' : ''} />
           Circle a blot twice before moving on
@@ -236,7 +244,7 @@ export function renderControls(
           <textarea rows="12" data-input="studioPrompt">${esc(settings.studioPrompt)}</textarea>
         </label>
         <button class="secondary" data-action="reset-studio-prompt">Reset this prompt</button>
-        <p class="muted small">${renderOps(settings.ink).length} strokes make the current blot · ${CHUNK_SECONDS}s per destination.</p>
+        <p class="muted small">Each blot rolls its own ${MIN_BLOT_MARKS}–${BLOT_MARKS} marks, each in its own colour and in its own place on the sheet · ${CHUNK_SECONDS}s per film destination.</p>
       </div>
     </details>`;
 }

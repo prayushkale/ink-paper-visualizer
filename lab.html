@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f6f3ec" />
+  <script>
+    // The same read as index.html's boot script, for the same reason: a blot is
+    // judged against the ground it sits on, and a theme applied late flashes.
+    (() => {
+      let theme = 'light';
+      try {
+        const stored = JSON.parse(localStorage.getItem('inkfilm.prefs.v1') || '{}');
+        if (stored && (stored.theme === 'light' || stored.theme === 'dark')) theme = stored.theme;
+      } catch {
+        /* corrupt or blocked storage: the default still stands */
+      }
+      document.documentElement.dataset.theme = theme;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f3ec' : '#0d0c10');
+    })();
+  </script>
+  <title>Ink &amp; Film — blot lab</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <style>
+    /* The lab leans on the app's own palette (styles.css) and adds only the
+       layout of this page: the batch as one table - a row per blot, columns
+       that line up all the way down the page - and one full-screen view for
+       the blot being stepped through. */
+    /*
+     * This page's root is a <main>, and the app's stylesheet has a `main` rule of
+     * its own: a three-column film grid (rail, stage, controls) with the overflow
+     * clipped. Left alone it swallowed this page - the toolbar took the stage
+     * column, the batch was laid into the 300px rail column and clipped there,
+     * and the clipped ancestor is also what stops the sticky head from sticking.
+     * An id beats that element selector, so the two lines below are the whole
+     * difference between a page and a squeezed column of it.
+     */
+    #lab {
+      display: block; overflow: visible;
+      max-width: 1760px; margin: 0 auto; padding: 18px 20px 72px;
+    }
+    .lab-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .lab-head h1 { margin: 0; font-size: 16px; letter-spacing: 0.01em; }
+    .lab-head p { margin: 0; font-size: 13px; color: var(--muted); }
+    .lab-head a { color: var(--accent-text); }
+
+    .bar {
+      display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end;
+      margin: 16px 0 4px; padding: 12px 14px;
+      border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+    }
+    .bar label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+    .bar input, .bar select { min-width: 92px; }
+    .bar input[type="number"] { width: 84px; }
+    .bar .spacer { flex: 1 1 auto; }
+
+    .summary { margin: 12px 0 8px; font-size: 13px; line-height: 1.7; color: var(--muted); }
+
+    /*
+     * Every class this page adds is prefixed `lab-`, because the app's own
+     * stylesheet is linked above and its `.row`, `.chip`, `.seed` and `.blot`
+     * already mean something else: a filmstrip row, a state pill, a seed
+     * readout, and a rail card with its own panel ground and 9px of padding -
+     * which is what framed the sheets on the old card layout.
+     *
+     * One column template, shared by the head row and every row of the batch:
+     * that is the whole of "aligned", so it is written once and the head cannot
+     * drift from the body. The numeric columns are fixed and right-aligned with
+     * tabular figures so the digits sit under each other down the page; the tool
+     * list takes the slack and the actions are fixed too, because an `auto` column is sized separately by every row: the head's empty cell collapsed to nothing, the 1fr tool column swallowed the slack on that row alone, and the last two columns stopped agreeing.
+     *
+     * The blot cell is a fixed 16:9 box rather than the sheet's own shape, so a
+     * batch of 9:16 blots still lines up with a batch of 16:9 ones; the sheet is
+     * letterboxed inside it with object-fit and opened full size on a click.
+     */
+    .lab-batch {
+      --cols: 320px 104px 84px 76px 92px 62px 62px 62px minmax(180px, 1fr) 340px;
+      border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+    }
+    .lab-row {
+      display: grid; grid-template-columns: var(--cols); align-items: center;
+      gap: 0 14px; padding: 8px 14px; cursor: pointer;
+    }
+    .lab-row + .lab-row { border-top: 1px solid var(--line-soft); }
+    .lab-row:not(.head):hover { background: var(--hover-bg); }
+    .lab-row:not(.head):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    /* Sticky, so a batch of 24 is still readable at the bottom of it. This is
+       why .batch must not clip its overflow: a rounded-corner clip here would
+       make .batch the scrollport and the head would never move. */
+    .lab-row.head {
+      position: sticky; top: 0; z-index: 5; cursor: default;
+      padding: 9px 14px; border-bottom: 1px solid var(--line);
+      border-radius: var(--radius) var(--radius) 0 0; background: var(--panel-2);
+      font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+    }
+
+    .lab-cell { min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .lab-cell.num { text-align: right; }
+    .lab-cell.seed { font-weight: 600; color: var(--accent-text); }
+    .lab-cell .star { color: var(--warn); }
+    .lab-thumb {
+      position: relative; height: 180px; overflow: hidden;
+      border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff;
+    }
+    .lab-thumb canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .lab-thumb .lab-zoom {
+      position: absolute; right: 6px; bottom: 6px; padding: 2px 8px;
+      border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
+      font-size: 11px; color: var(--muted); opacity: 0; transition: opacity 0.12s; z-index: 1;
+    }
+    .lab-row:hover .lab-zoom { opacity: 1; }
+    /* A two-column grid, not a wrapping flex row: chips line up in slots, so
+       `splatter 6` in one row sits directly above `splatter 6` in the next
+       instead of drifting with whatever came before it. */
+    .lab-tools {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 10px; align-content: center; color: var(--muted);
+    }
+    .lab-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .lab-chip i { width: 9px; height: 9px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--mark-edge); }
+    .lab-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .lab-actions button { min-height: 0; height: 26px; padding: 0 9px; font-size: 12px; }
+
+    #labfocus { position: fixed; inset: 0; z-index: 40; overflow: auto; padding: 24px; background: var(--bg); }
+    .focus-card { max-width: 1280px; margin: 0 auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    .focus-card header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    .focus-card header h2 { margin: 0; font-size: 15px; font-variant-numeric: tabular-nums; }
+    .focus-card header .spacer-action { margin-left: auto; }
+    .focus-body { display: grid; grid-template-columns: minmax(320px, 1.4fr) minmax(300px, 1fr); gap: 18px; padding: 16px; }
+    .focus-view img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
+    .map-toggle { display: flex; align-items: center; gap: 6px; margin: 8px 0; font-size: 13px; color: var(--muted); }
+    .steps { display: flex; align-items: center; gap: 8px; }
+    .steps button { min-height: 0; padding: 4px 9px; font-size: 12px; }
+    .beat { min-height: 20px; margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+    .json { max-height: 240px; margin: 0 0 12px; overflow: auto; padding: 8px 10px; font-size: 11px; background: var(--sunk); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+    table.ops { width: 100%; border-collapse: collapse; font-size: 12px; }
+    table.ops th, table.ops td { padding: 3px 6px; text-align: left; border-bottom: 1px solid var(--line-soft); }
+    table.ops th { color: var(--muted); font-weight: 500; }
+    .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 5px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--mark-edge); }
+
+    /* Below this the rule names still fit, the sheets just give up some width. */
+    @media (max-width: 1340px) {
+      .lab-batch { --cols: 240px 88px 72px 68px 80px 54px 54px 54px minmax(140px, 1fr) 320px; }
+    }
+    @media (max-width: 900px) { .focus-body { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main id="lab"></main>
+  <div id="labfocus" hidden></div>
+  <script type="module" src="/src/lab.ts"></script>
+</body>
+</html>

@@ -47,6 +47,15 @@ export interface InkOp {
   alpha: number;
   /** 0-1, drives droplet spread and edge bleed. */
   wetness: number;
+  /**
+   * Width at the far end of a stroke, as a multiplier of `width`.
+   *
+   * A limb of ink thins as it is pulled away from the body it grew out of, and
+   * a stroke that keeps its full width all the way to its tip reads as a bar
+   * rather than as ink. Undefined leaves the mark's own symmetric taper to
+   * decide, which is what a mark that is not a limb wants.
+   */
+  rampTo?: number;
   /** per-op randomness so a re-render is identical without sharing the RNG */
   seed: number;
 }

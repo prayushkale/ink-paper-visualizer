@@ -34,6 +34,8 @@ export interface DirectorSessionEvents {
   onPromptApplied?(promptVersion: number, scriptQueued: number | null): void;
   onPromptRejected?(info: { promptVersion: number; reason: string; error: string | null }): void;
   onAudioApplied?(info: { behavior: string | null; durationSeconds: number; remainingSeconds: number }): void;
+  /** The track was handed over and the server is still getting ready to play it. */
+  onAudioPending?(info: { behavior: string | null }): void;
   onAudioRejected?(info: { reason: string; error: string }): void;
   onAudioExhausted?(info: { chunkIndex: number; silentSeconds: number }): void;
   onExhausted?(info: { reason: string; chunks: number }): void;
@@ -317,6 +319,9 @@ export class DirectorSession {
           error: message.error,
         });
         break;
+      case 'audio_pending':
+        this.events.onAudioPending?.({ behavior: message.behavior });
+        break;
       case 'audio_applied':
         this.events.onAudioApplied?.({
           behavior: message.behavior,
@@ -343,7 +348,7 @@ export class DirectorSession {
         this.events.onUnknownMessage?.(message.raw);
         break;
       default:
-        // pong, session_metrics, audio_pending: no app behaviour depends on them
+        // pong, session_metrics: no app behaviour depends on them
         break;
     }
   }

@@ -67,7 +67,8 @@ function guideFrame(canvas: HTMLCanvasElement, fold: Fold, maxEdge: number): str
   ctx.beginPath();
   ctx.moveTo(from.x * copy.width, from.y * copy.height);
   ctx.lineTo(to.x * copy.width, to.y * copy.height);
-  ctx.strokeStyle = 'rgba(246, 241, 232, 0.6)';
+  // the sheet is white, so the halo that keeps the crease legible over ink is white too
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
   ctx.lineWidth = lineWidth * 2.6;
   ctx.stroke();
   ctx.setLineDash([canvas.width * 0.045, canvas.width * 0.028]);

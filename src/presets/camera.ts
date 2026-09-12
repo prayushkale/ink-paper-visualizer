@@ -31,6 +31,21 @@ export interface CameraMove {
 }
 
 /**
+ * The clip lengths Multi Angle accepts. The endpoint allows 5 to 15 seconds.
+ */
+export const MIN_ANGLE_SECONDS = 5;
+
+/**
+ * The longest one blot's clip may be.
+ *
+ * The clip exists to hand the film one more viewpoint of a blot, and the switch
+ * from the painting to the footage is over inside its first second, so the rest
+ * of it is the camera's move and nothing else: past seven seconds the model has
+ * run out of move to make and invents, and every extra second is billed.
+ */
+export const MAX_ANGLE_SECONDS = 7;
+
+/**
  * Multi Angle preserves signed turns up to 32 full rotations, and holds the
  * first pose before `time[0]` and the last pose after `time[n-1]`, so the final
  * keyframe is exactly the still we extract as a Director destination.
@@ -145,7 +160,7 @@ export interface CameraConfig {
   /** How many angle views of one blot to arrive at before moving on. 0-4. */
   anglesPerBlot: number;
   resolution: '480P' | '768P' | '1080P';
-  /** Multi Angle clip length; 5-15. */
+  /** Multi Angle clip length in seconds, MIN_ANGLE_SECONDS-MAX_ANGLE_SECONDS. */
   duration: number;
   /** Multi Angle only accepts 'balanced' or 'quality'. */
   promptExpansionMode: 'balanced' | 'quality';

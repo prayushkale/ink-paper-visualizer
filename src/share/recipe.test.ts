@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { decodeShare, describeShare, encodeShare, readShareFromHash, shareUrl, type SharedSettings } from './recipe';
-import { MAX_FOLDS, defaultInkRecipe, inkRecipeFromSeed, renderOps } from '../ink/recipe';
+import { BLOT_MARKS, MAX_FOLDS, defaultInkRecipe, inkRecipeFromSeed, renderOps } from '../ink/recipe';
 import { canvasForAspect } from '../ink/types';
+import { MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS } from '../presets/camera';
 
 const fallback = defaultInkRecipe();
 
@@ -29,7 +30,7 @@ function makeShared(overrides: Partial<SharedSettings> = {}): SharedSettings {
       moves: ['orbit-right', 'push-in'],
       anglesPerBlot: 3,
       resolution: '768P',
-      duration: 8,
+      duration: MAX_ANGLE_SECONDS,
       handoff: 'turn',
       repeatAngleCycle: true,
     },
@@ -97,14 +98,15 @@ describe('encodeShare / decodeShare', () => {
     };
     const code = encodeShare(payload as unknown as SharedSettings);
     const decoded = decodeShare(code, fallback)!;
-    expect(decoded.recipe.blotCount).toBeLessThanOrEqual(24);
+    expect(decoded.recipe.blotCount).toBeLessThanOrEqual(BLOT_MARKS);
     expect(decoded.recipe.wetness).toBeLessThanOrEqual(1);
     expect(decoded.recipe.bleed).toBeGreaterThanOrEqual(0);
     expect(decoded.moodId).toBe('dreamlike');
     expect(decoded.musicId).toBe('ambient');
     expect(decoded.musicMode).toBe('pinned');
     expect(decoded.camera.anglesPerBlot).toBeLessThanOrEqual(4);
-    expect(decoded.camera.duration).toBeGreaterThanOrEqual(5);
+    expect(decoded.camera.duration).toBeGreaterThanOrEqual(MIN_ANGLE_SECONDS);
+    expect(decoded.camera.duration).toBeLessThanOrEqual(MAX_ANGLE_SECONDS);
     expect(decoded.camera.resolution).toBe('480P');
     expect(decoded.camera.handoff).toBe('continue');
     expect(decoded.camera.moves.length).toBeGreaterThan(0);

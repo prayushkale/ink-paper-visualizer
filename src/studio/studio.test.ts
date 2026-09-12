@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { InkStudio, type StudioOptions, type StudioView } from './studio';
 import { defaultSettings, applyQualityPreset, type Settings } from '../state';
 import { inkRecipeFromSeed } from '../ink/recipe';
+import { MOODS } from '../presets/moods';
+import { MUSIC_PRESETS } from '../presets/music';
 import type { MultiAngleInput } from '../angle/multiAngle';
 import type { HealthResponse } from '../api/client';
 import type { DirectorConnection, DirectorTransport, TransportHandlers } from '../stream/transport';
@@ -386,6 +388,20 @@ describe('InkStudio', () => {
     h.transport.server(chunk());
     const prompt = String(h.transport.sent.find((message) => message.type === 'prompt')!.prompt);
     expect(prompt.length).toBeGreaterThan(80);
+  });
+
+  it('tells Multi Angle what the blot is a reference for, and caps the clip', async () => {
+    const h = harness();
+    await goLive(h);
+    const prompt = String(h.calls.angleRequests[0]!.prompt ?? '');
+    // Multi Angle keeps the scene frozen and animates the painting it was handed
+    // unless the mood, the score and the blot's reading are sent with it
+    expect(prompt).toContain(MOODS[h.settings.moodId].label);
+    expect(prompt).toContain(MUSIC_PRESETS[h.settings.music.musicId].label);
+    expect(prompt).toMatch(/first second/);
+    expect(prompt).toMatch(/live-action photography/);
+    // one clip per blot, seven seconds at the very most
+    expect(h.calls.angleRequests.every((request) => request.duration <= 7)).toBe(true);
   });
 
   it('orbits through Multi Angle and hosts the arrival frames', async () => {

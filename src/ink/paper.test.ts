@@ -20,8 +20,9 @@ describe('uvToPixels', () => {
 });
 
 describe('paper constants', () => {
-  it('keeps the legacy 1024 canvas default and a warm paper tone', () => {
+  it('keeps the legacy 1024 canvas default on a pure white sheet', () => {
     expect(CANVAS_SIZE).toBe(1024);
-    expect(PAPER_COLOR).toBe('#f4efe6');
+    // white, so the fold commit's multiply can only deepen ink and never tint a crease
+    expect(PAPER_COLOR).toBe('#ffffff');
   });
 });

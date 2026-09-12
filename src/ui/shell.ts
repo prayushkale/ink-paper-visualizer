@@ -33,6 +33,8 @@ export interface ShellActions extends ControlActions {
   pauseFilm(): void;
   resumeFilm(): void;
   enterManual(): void;
+  /** Leaves the hand-painted route and gives the settings column back. */
+  exitManual(): void;
   /** Empties the last run's leavings - the blots, the log, the recording. */
   clearSession(): void;
 }
@@ -45,6 +47,8 @@ export interface ShellElements {
   hud: HTMLElement;
   /** The element that carries the film; double-clicking it goes fullscreen. */
   film: HTMLElement;
+  /** The transport over a take being replayed: pause and the scrubber. */
+  playback: HTMLElement;
   /** Where a blot's own painting plays, large, while the rail is warming up. */
   painting: HTMLElement;
   /** The full-screen blot viewer, filled from the rail on demand. */
@@ -56,7 +60,6 @@ export interface ShellElements {
   /** Where the settings sections render. Replaced on change, not on every tick. */
   controlBody: HTMLElement;
   telemetry: HTMLElement;
-  preflight: HTMLElement;
   /** The column transient notices stack in: top right, out of the flow. */
   toasts: HTMLElement;
 }
@@ -70,6 +73,13 @@ function readValue(element: HTMLElement): string | boolean | number {
   }
   if (element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) return element.value;
   return '';
+}
+
+/** A take's clock, as a player writes it: `1:07`. */
+function clockLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
 /**
@@ -93,6 +103,8 @@ export class StudioShell {
   private draggingSlider = false;
   /** Highest alert id already shown as a toast. */
   private lastAlertId = 0;
+  /** The notes the last render had to make, so only the new ones are said. */
+  private lastNotes: string[] = [];
   /** Which sidebar sections are open: read once on load, written through on toggle. */
   private readonly sections = createSectionStore();
   /** The blot whose picture is open in the viewer, or null when it is closed. */
@@ -103,6 +115,9 @@ export class StudioShell {
   private replay: { url: string; index: number } | null = null;
   /** The one-shot listener that reports a take this browser cannot play. */
   private replayError: (() => void) | null = null;
+  /** True while the user is dragging the take's scrubber, so a `timeupdate`
+   *  landing mid-drag does not yank the thumb back under the pointer. */
+  private draggingScrub = false;
 
   constructor(
     private readonly elements: ShellElements,
@@ -135,6 +150,54 @@ export class StudioShell {
     });
     // double-click the picture for fullscreen, the way a video player behaves
     elements.film.addEventListener('dblclick', () => void this.toggleFullscreen());
+    // The transport is not inside a panel, so it carries its own listeners; a
+    // double-click on it must not fall through to the stage's fullscreen.
+    elements.playback.addEventListener('click', (event) => this.onPlaybackClick(event));
+    elements.playback.addEventListener('dblclick', (event) => event.stopPropagation());
+    elements.playback.addEventListener('input', (event) => this.onScrub(event));
+    elements.playback.addEventListener('change', (event) => this.onScrub(event, true));
+    // A take plays on the same element as the live stream, so the transport reads
+    // its clock and its play state straight off the element rather than tracking
+    // either of them itself.
+    const player = elements.app.querySelector('video');
+    if (player) {
+      for (const name of ['timeupdate', 'play', 'pause', 'loadedmetadata', 'durationchange', 'seeked'] as const) {
+        player.addEventListener(name, () => this.syncPlayback());
+      }
+    }
+  }
+
+  /** The stage's one video element: the live stream, or a take replayed on it. */
+  private player(): HTMLVideoElement | null {
+    return this.elements.app.querySelector('video');
+  }
+
+  /** Clicking the transport: pause/resume the take, or take it off the stage. */
+  private onPlaybackClick(event: Event): void {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-action]');
+    switch (button?.dataset.action) {
+      case 'toggle-replay': {
+        const player = this.player();
+        if (!player) return;
+        if (player.paused) void player.play().catch(() => {});
+        else player.pause();
+        break;
+      }
+      case 'stop-replay': this.endReplay(); this.render(this.studio.view); break;
+      default: break;
+    }
+  }
+
+  /** Dragging the scrubber seeks the take; the guard keeps `timeupdate` off it. */
+  private onScrub(event: Event, done = false): void {
+    const input = event.target as HTMLInputElement | null;
+    if (!input || input.dataset.scrub === undefined) return;
+    const player = this.player();
+    if (!player) return;
+    this.draggingScrub = !done;
+    const duration = Number.isFinite(player.duration) ? player.duration : 0;
+    if (duration > 0) player.currentTime = (Number(input.value) / Number(input.max)) * duration;
+    this.syncPlayback();
   }
 
   private onInput(event: Event): void {
@@ -179,11 +242,19 @@ export class StudioShell {
       case 'share': void this.copyShare(); break;
       case 'clear': this.endReplay(); this.actions.clearSession(); break;
       case 'poster': void this.viewPoster(); break;
-      case 'play-recording': this.replayRecording(Number(button.dataset.index ?? 0)); break;
+      case 'play-recording': {
+        // The button reads Stop while its take is on the stage, so the same click
+        // has to take it off again instead of restarting it from the top.
+        const index = Number(button.dataset.index ?? 0);
+        if (this.replay?.index === index) this.endReplay();
+        else this.replayRecording(index);
+        break;
+      }
       case 'show-controls': this.setWatch(false); break;
       case 'mute': this.toggleSound(); break;
       case 'theme': this.toggleTheme(); break;
       case 'manual': this.actions.enterManual(); break;
+      case 'back-to-film': this.actions.exitManual(); break;
       case 'mood': if (value) this.actions.setMood(value as never); break;
       case 'quality': if (value) this.actions.setQuality(value as never); break;
       case 'music': if (value) this.actions.setMusic(value as never); break;
@@ -362,6 +433,7 @@ export class StudioShell {
     // no explanation, which reads as a broken app rather than an old container.
     this.replayError = () => this.toast('this browser cannot play that take back — download the file instead', 'error');
     player.addEventListener('error', this.replayError, { once: true });
+    this.showPlayback();
     void player.play().catch(() => this.toast('press play on the film to start the take'));
   }
 
@@ -379,7 +451,50 @@ export class StudioShell {
       player.load();
     }
     this.replayError = null;
+    this.hidePlayback();
     URL.revokeObjectURL(url);
+  }
+
+  /**
+   * The transport over a replayed take: a pause toggle, the clock, and a
+   * scrubber to jump anywhere in it. It is built once when the take lands on the
+   * stage and then read off the element's own events, so nothing here is a second
+   * source of truth for where the picture is.
+   */
+  private showPlayback(): void {
+    const host = this.elements.playback;
+    host.hidden = false;
+    host.innerHTML = `
+      <button class="ghost playback-toggle" data-action="toggle-replay" title="Pause or resume this take">Pause</button>
+      <input class="playback-scrub" type="range" min="0" max="1000" step="1" value="0"
+             data-scrub aria-label="Jump to any point in this take" />
+      <span class="playback-clock" data-slot="clock">0:00 / 0:00</span>
+      <button class="ghost playback-stop" data-action="stop-replay" title="Take the take off the stage">Stop</button>`;
+    this.syncPlayback();
+  }
+
+  private hidePlayback(): void {
+    const host = this.elements.playback;
+    host.hidden = true;
+    host.innerHTML = '';
+    this.draggingScrub = false;
+  }
+
+  /** Mirrors the element's clock and play state into the transport. */
+  private syncPlayback(): void {
+    if (!this.replay) return;
+    const player = this.player();
+    if (!player) return;
+    const host = this.elements.playback;
+    const duration = Number.isFinite(player.duration) ? player.duration : 0;
+    const scrub = host.querySelector<HTMLInputElement>('.playback-scrub');
+    if (scrub && !this.draggingScrub) {
+      scrub.value = String(duration > 0 ? Math.round((player.currentTime / duration) * Number(scrub.max)) : 0);
+    }
+    const clock = host.querySelector('[data-slot="clock"]');
+    if (clock) clock.textContent = `${clockLabel(player.currentTime)} / ${clockLabel(duration)}`;
+    const toggle = host.querySelector<HTMLElement>('[data-action="toggle-replay"]');
+    if (toggle) toggle.textContent = player.paused ? 'Play' : 'Pause';
   }
 
   private toggleCameraMove(move: string): void {
@@ -527,9 +642,9 @@ export class StudioShell {
     this.render(this.studio.view);
   }
 
-  /** Shows a one-line note above the film. */
+  /** One line the run has to say, as a toast: the bar keeps no notes any more. */
   showNote(text: string): void {
-    this.elements.preflight.innerHTML = `<p class="note">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`;
+    this.toast(text, 'warn');
   }
 
   render(view: StudioView): void {
@@ -562,7 +677,7 @@ export class StudioShell {
     this.renderViewer();
     renderTelemetry(this.elements.telemetry, view, this.replay?.index ?? null);
     this.renderControlsIfNeeded(view, settings);
-    this.renderPreflight(view, health);
+    this.renderNotes(view, health);
     this.renderAlerts(view);
   }
 
@@ -594,6 +709,16 @@ export class StudioShell {
   private renderTopActions(busy: boolean, view: StudioView): void {
     const slot = this.elements.topbar.querySelector('[data-slot="actions"]');
     if (!slot) return;
+    // The hand-painted route is a place of its own, and the bar is how a person
+    // gets out of it: the pad's own Back button is the last line of a column
+    // that scrolls, which is not a way out anybody finds.
+    if (this.elements.app.dataset.mode === 'manual') {
+      const palette = this.prefs.state().theme === 'dark'
+        ? '<button class="ghost" data-action="theme" title="Use the light palette">Light</button>'
+        : '<button class="ghost" data-action="theme" title="Use the dark palette">Dark</button>';
+      slot.innerHTML = `<button class="primary" data-action="back-to-film">Back to the film</button>${palette}`;
+      return;
+    }
     const player = this.elements.app.querySelector('video');
     const sound = player && !player.muted
       ? '<button class="ghost" data-action="mute" title="Mute the film">Sound on</button>'
@@ -650,7 +775,16 @@ export class StudioShell {
       && view.warnings.length === 0;
   }
 
-  private renderPreflight(view: StudioView, health: HealthResponse | null): void {
+  /**
+   * Everything the run has to say, as a toast.
+   *
+   * This used to be a strip of notes pinned under the bar, and a note outlives
+   * the condition that made it: "the rail ran dry" sat there for the rest of a
+   * run that had long since caught up. A toast comes and goes, so only what is
+   * true now is on screen - and each note is said once, when it appears, rather
+   * than repainted on every heartbeat.
+   */
+  private renderNotes(view: StudioView, health: HealthResponse | null): void {
     const messages: string[] = [];
     if (health && !health.fal) messages.push('FAL_KEY is missing from the server .env, so nothing can start.');
     if (health && !health.openrouter) messages.push('OPENROUTER_API_KEY is missing, so blots cannot be imagined.');
@@ -664,9 +798,10 @@ export class StudioShell {
     if (view.status === 'paused') {
       messages.push('Paused: the session is closed, so nothing more is being generated or billed. Play opens a new session on the frozen frame, which bills a fresh session minimum.');
     }
-    const warnings = [...messages, ...view.warnings.slice(-3)];
-    this.elements.preflight.innerHTML = warnings.length === 0
-      ? ''
-      : warnings.map((text) => `<p class="note">${text}</p>`).join('');
+    const notes = [...messages, ...view.warnings.slice(-3)];
+    for (const text of notes) {
+      if (!this.lastNotes.includes(text)) this.toast(text, 'warn');
+    }
+    this.lastNotes = notes;
   }
 }

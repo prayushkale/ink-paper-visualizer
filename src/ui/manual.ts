@@ -1,4 +1,8 @@
 import { DEFAULT_VISION_PROMPT, type DropOptions, type Phase, type Settings } from '../state';
+import { MAX_ANGLE_SECONDS } from '../presets/camera';
+import { moodById } from '../presets/moods';
+import { musicById } from '../presets/music';
+import { composeBlotClipBrief } from '../stream/promptComposer';
 import type { Fold, InkRecipe } from '../ink/types';
 import { foldGeometry } from '../ink/fold-math';
 import { parseSeed } from '../ink/rng';
@@ -53,12 +57,26 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
   function render(): void {
     const paper = ctx.getPaper();
     ctx.container.innerHTML = '';
+    head();
     if (state.phase === 'paint') renderPaint();
     else if (state.phase === 'folding') renderBusy('Folding the paper', 'One half mirrors onto the other, wet on wet.');
     else if (state.phase === 'interpreting') renderBusy('Imagining', 'The vision model is reading the blot.');
     else if (state.phase === 'reveal') renderReveal();
     else renderReview();
     void paper;
+  }
+
+  /**
+   * The top of the pad: the way back to the studio.
+   *
+   * It is also the last line of every pad, but the pad is a column of controls
+   * that scrolls, so the one button that leaves the painting mode sat below the
+   * fold of everything but the first phase - a mode with no visible way out.
+   */
+  function head(): void {
+    const bar = h('<div class="pad-head"><button class="ghost" id="btnBackToFilm">Back to the film</button></div>');
+    bar.querySelector('#btnBackToFilm')!.addEventListener('click', () => ctx.onExit());
+    ctx.container.appendChild(bar);
   }
 
   function renderPaint(): void {
@@ -164,6 +182,8 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
 
   function renderReveal(): void {
     const paper = ctx.getPaper();
+    const mood = moodById(ctx.settings.moodId);
+    const music = musicById(ctx.settings.music.musicId);
     ctx.container.appendChild(h(`
       <div class="pad">
         <h2>The blot</h2>
@@ -176,6 +196,12 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
           <textarea id="visionPrompt" rows="10">${esc(ctx.settings.visionPrompt)}</textarea>
         </label>
         <button class="secondary" id="btnResetVision">Reset this prompt</button>
+        <p class="hint">
+          The imagining runs under <strong>${esc(mood.label)}</strong> at
+          ${ctx.settings.moodStrength.toFixed(2)} pressure and a <strong>${esc(music.label)}</strong> score at
+          ${music.bpm} BPM. The clip it writes is at most ${MAX_ANGLE_SECONDS}s long, and the painting is over
+          inside its first second.
+        </p>
         <button class="primary" id="btnInterpret">Imagine this blot</button>
         <button class="secondary" id="btnMoreInk">Back to painting</button>
         <button class="ghost" id="btnHandoffDirect">Skip the imagining, hand it over</button>
@@ -206,7 +232,15 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
           state.interpretation = await api.interpret({
             image: ctx.getPaper().toDataUri(),
             model: ctx.settings.openrouterModel,
-            visionPrompt: ctx.settings.visionPrompt,
+            // the mood and the score are settings like any other: the imagining
+            // is made under them rather than beside them
+            visionPrompt: composeBlotClipBrief({
+              basePrompt: ctx.settings.visionPrompt,
+              mood,
+              music,
+              moodStrength: ctx.settings.moodStrength,
+              seconds: MAX_ANGLE_SECONDS,
+            }),
           });
           state.error = undefined;
         } catch (error) {

@@ -1,4 +1,11 @@
-import { CAMERA_MOVES, validateTrajectory, type CameraKeyframe, type CameraMoveId } from '../presets/camera';
+import {
+  CAMERA_MOVES,
+  MAX_ANGLE_SECONDS,
+  MIN_ANGLE_SECONDS,
+  validateTrajectory,
+  type CameraKeyframe,
+  type CameraMoveId,
+} from '../presets/camera';
 
 export const MULTI_ANGLE_ENDPOINT = 'minimax/h3-max/multi-angle/image-to-video';
 
@@ -33,6 +40,15 @@ export class InvalidTrajectoryError extends Error {
 }
 
 /**
+ * The clip length actually asked for: the endpoint's own five-second floor under
+ * our seven-second ceiling. Shared so a prompt describing the clip can never
+ * quote a length the request did not send.
+ */
+export function clampAngleSeconds(seconds: number): number {
+  return Math.min(MAX_ANGLE_SECONDS, Math.max(MIN_ANGLE_SECONDS, Math.round(seconds)));
+}
+
+/**
  * Builds the Multi Angle payload. Kept pure and strict: the endpoint rejects
  * unknown fields, and a bad trajectory costs a real queue round trip, so both
  * are caught here rather than at the API.
@@ -47,7 +63,8 @@ export function buildMultiAngleInput(request: MultiAngleRequest): MultiAngleInpu
   if (!keyframes) throw new Error(`unknown camera move: ${request.move}`);
   const verdict = validateTrajectory(keyframes);
   if (!verdict.ok) throw new InvalidTrajectoryError(verdict.reason ?? 'unknown');
-  const duration = Math.min(15, Math.max(5, Math.round(request.duration)));
+  // the endpoint would take fifteen seconds; a blot's own clip is capped at seven
+  const duration = clampAngleSeconds(request.duration);
   const input: MultiAngleInput = {
     image_url: request.imageUrl,
     camera_trajectory: keyframes,

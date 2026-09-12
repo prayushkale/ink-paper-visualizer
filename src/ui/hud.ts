@@ -174,7 +174,7 @@ export function renderTelemetry(root: HTMLElement, view: StudioView, replaying: 
         : `${parts.map((part, index) => `
              <div class="recording-row">
                <button class="${replaying === index ? 'danger' : 'primary'}" data-action="play-recording" data-index="${index}"
-                       title="${replaying === index ? 'Take the take off the stage' : 'Play this take on the stage, over and over'}">
+                       title="${replaying === index ? 'Take the take off the stage' : 'Play this take on the stage, with a pause and a scrubber over the picture'}">
                  ${replaying === index ? 'Stop' : 'Play'} <span class="muted">· ${formatDuration(part.durationMs)}</span>
                </button>
                <button class="secondary" data-action="download" data-index="${index}">
@@ -184,7 +184,7 @@ export function renderTelemetry(root: HTMLElement, view: StudioView, replaying: 
              </div>`).join('')}
            ${replaying === null
              ? ''
-             : '<p class="muted">Playing this take on the stage, on a loop. Start the film to go back to the live session.</p>'}
+             : '<p class="muted">Playing this take on the stage, on a loop. Pause it or jump through it with the bar under the picture. Start the film to go back to the live session.</p>'}
            ${view.capabilities.ffmpeg ? '' : '<p class="muted">ffmpeg was not found, so a webm cannot be converted to mp4 here.</p>'}`}
     </div>
 

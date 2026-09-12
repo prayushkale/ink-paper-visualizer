@@ -1,7 +1,7 @@
-import { MAX_FOLDS } from '../ink/recipe';
+import { BLOT_MARKS, MAX_FOLDS } from '../ink/recipe';
 import { clamp, clamp01, parseSeed } from '../ink/rng';
 import { canvasForAspect, type AspectRatio, type InkRecipe, type InkToolId } from '../ink/types';
-import { CAMERA_MOVE_IDS, type CameraMoveId } from '../presets/camera';
+import { CAMERA_MOVE_IDS, MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS, type CameraMoveId } from '../presets/camera';
 import { MOOD_IDS, type MoodId } from '../presets/moods';
 import { MUSIC_IDS, type MusicId } from '../presets/music';
 
@@ -113,7 +113,7 @@ export function decodeShare(code: string, fallbackRecipe: InkRecipe): SharedSett
         ? recipe.palette.filter((color): color is string => typeof color === 'string').slice(0, 8)
         : fallbackRecipe.palette,
       tools: tools.length > 0 ? tools : fallbackRecipe.tools,
-      blotCount: Math.round(asNumber(recipe.blotCount, fallbackRecipe.blotCount, 1, 24)),
+      blotCount: Math.round(asNumber(recipe.blotCount, fallbackRecipe.blotCount, 1, BLOT_MARKS)),
       wetness: asNumber(recipe.wetness, fallbackRecipe.wetness, 0, 1),
       bleed: asNumber(recipe.bleed, fallbackRecipe.bleed, 0, 1),
       folds: Array.isArray(recipe.folds)
@@ -137,7 +137,7 @@ export function decodeShare(code: string, fallbackRecipe: InkRecipe): SharedSett
       moves: asArrayOf(camera.moves, CAMERA_MOVE_IDS, ['orbit-right', 'push-in', 'crane-up']),
       anglesPerBlot: Math.round(asNumber(camera.anglesPerBlot, 2, 0, 4)),
       resolution: asIn(camera.resolution, ['480P', '768P', '1080P'] as const, '480P'),
-      duration: Math.round(asNumber(camera.duration, 5, 5, 15)),
+      duration: Math.round(asNumber(camera.duration, MIN_ANGLE_SECONDS, MIN_ANGLE_SECONDS, MAX_ANGLE_SECONDS)),
       handoff: asIn(camera.handoff, ['continue', 'turn'] as const, 'continue'),
       repeatAngleCycle: camera.repeatAngleCycle === true,
     },

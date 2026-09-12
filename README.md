@@ -94,11 +94,32 @@ seeded ink engine ──► blot ──► hosted on fal ──► vision model 
                     └─ session ceiling ──► handover ──► new session, same picture
 ```
 
-1. **Ink.** A seed picks tools (drop, splatter, streak, curve, pool, drag, spray,
-   backrun), draws 2–4 colours **at random** from the full pigment range, and
-   lays down a fold plan of 0–7 vertical/horizontal creases at a centre or
-   off-centre position. The canvas is rendered at the stream's aspect ratio,
-   because image-to-video inherits the ratio of the image you give it.
+1. **Ink.** A seed picks the composition of the blot - a lone body with a stub,
+   a body low on the sheet with one long arm thrown up across it, arms all round
+   it, fronds leaning the same way, a dry sweep set off from one edge, or two
+   arms crossing at the middle - then picks tools (pool, drop, streak, curve,
+   drag, spray, backrun) and lays down a fold plan of 0–7 vertical/horizontal
+   creases at a centre or off-centre position. The retired splatter is not among
+   them: it throws a ring of droplets clear of its own blob, so it reads as
+   damage to a mark rather than as ink. A blot is **up to seven marks** - the
+   engine rolls a count of 1–7 for each blot - and **every mark grows out of the
+   body**: a limb is a stroke that opens at the middle of the mass, thins as it
+   walks away from it and breaks into flecks at its tip, and the marks left over
+   pool as knots along a limb that is already there. That is what makes a blot
+   one piece of ink rather than five blots sharing a page. A body that is the
+   only thing on the sheet pools where it was pressed, with a ragged edge and a
+   spatter or two on it. Pigment comes from the full range at random and is laid
+   on a **ramp**: the body takes the deepest colour and the marks walking away
+   from it take paler ones, so a page reads from its centre outwards instead of
+   arriving as seven unrelated dips. The drawing is held to two rules: no mark is
+   thinner than 4% of the short edge, and a blot is grown - fatter, and walked
+   clear of whatever edge it was painted into - until it inks at least a fifth of
+   the sheet, so the rail never fills with speckle. The sheet is pure white
+   because a fold prints the moving flap back over the far half with `multiply`,
+   and against a tinted sheet that blend darkens the tint at every crease; white
+   leaves the fold showing in the ink alone. The canvas is rendered at the
+   stream's aspect ratio, because image-to-video inherits the ratio of the image
+   you give it.
 
    Nothing opens a paid session until the rail holds three ready blots, so
    pressing **Start** runs a pre-flight first: paint, host, imagine and (when the
@@ -124,7 +145,11 @@ seeded ink engine ──► blot ──► hosted on fal ──► vision model 
    parse.
 3. **Orbits.** Multi Angle turns the blot into keyframed camera takes; the app
    extracts each clip's **final pose** (the model holds it to the end) and hosts
-   it. Those stills are consistent views of the same frozen scene.
+   it. Those stills are consistent views of the same frozen scene. One clip per
+   blot, **seven seconds at most**, and the clip is told what it is: the mood, the
+   score and the blot's own reading go into its prompt, along with the rule that
+   the painting is over **inside its first second** - without that prompt the
+   model animates the painting it was handed and the film arrives on ink.
 4. **The film.** The scheduler sends one direction per *dispatched* chunk,
    carrying the next arrival image and the text that describes it. A blot with two
    angles occupies three chunks: the blot, then two views of it.
@@ -151,7 +176,7 @@ the gate if an acknowledgement never comes.
 | **Stream** | resolution, frame (16:9 / 9:16 / 1:1), memory (1–50 prior beats), hard vs soft blot arrival, auto-chaining, seed |
 | **Mood** | ten presets and a 0–1 pressure dial. Changing mood mid-film sends a direction, never a new session |
 | **Music** | ten genres, **pinned** (the track is conditioning audio: every chunk is generated against the next window of it) or **generated** (the model writes the score, the default because `assets/music/` ships empty), track URL, dropped file |
-| **Camera** | which moves may be used, angles per blot (0–4), orbit resolution and length, circle twice, handover policy |
+| **Camera** | which moves may be used, angles per blot (0–4), orbit resolution and length (**5–7s**: one clip per blot, and it opens on the blot), circle twice, handover policy |
 | **Budget** | session and daily caps, session length (10s–15m; Director still bills a 60s minimum per session), dry run |
 | **Vision** | the OpenRouter model and the prompt that turns a blot into a beat |
 
@@ -231,6 +256,7 @@ src/stream/                wire protocol, session, scheduler, chaining, budget
 src/record/                MediaRecorder wrapper with an mp4-first fallback
 src/studio/                the orchestrator and its browser wiring
 src/ui/                    rail, HUD, controls, shell, poster, viewer, manual mode
+lab.html, src/lab.ts       the blot lab: the engine, full size, off the film's clock
 ```
 
 ## Testing
@@ -250,6 +276,16 @@ protect money and continuity:
   our handover is invisible and the server's is not
 * an end-to-end server test converts a generated webm through the real ffmpeg and
   probes the result for an h264 stream
+
+### The blot lab
+
+`lab.html` is the ink engine on a page of its own (the dev server serves it at
+`/lab.html`). It paints a batch of invented blots at full size through the same
+call the rail's `invent` port makes, keeps the batch's seeds in storage so an
+edit to `src/ink/recipe.ts` and a reload show the same blots rather than a fresh
+handful, and steps any one blot through the beats it is painted in - with the op
+log drawn over the ink, which is the view that explains why a sheet looks the
+way it does. It talks to no server and spends nothing.
 
 ## Troubleshooting
 

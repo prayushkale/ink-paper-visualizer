@@ -161,23 +161,22 @@ html, body {
 }
 
 /*
- * Four tracks, one per child in document order: the bar, the pre-flight notes,
- * the three panels, the strip. Every child is pinned to its own row, because
- * auto-placement counts only the children that are actually in the grid - an
- * empty `#notes` or a hidden `#filmstrip` drops out and hands the stretchy
- * track to whatever follows, which left the panels sized by their content and
- * a dead band at the bottom of the window.
+ * Three tracks, one per child in document order: the bar, the three panels, the
+ * strip. Every child is pinned to its own row, because auto-placement counts
+ * only the children that are actually in the grid - a hidden `#filmstrip` drops
+ * out and hands the stretchy track to whatever follows, which left the panels
+ * sized by their content and a dead band at the bottom of the window. The run's
+ * notes have no track: they are toasts now, out of the grid entirely.
  */
 #app {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100dvh;
   padding-bottom: env(safe-area-inset-bottom);
 }
 #app > #topbar { grid-row: 1; }
-#app > #notes { grid-row: 2; }
-#app > main { grid-row: 3; }
-#app > #filmstrip { grid-row: 4; }
+#app > main { grid-row: 2; }
+#app > #filmstrip { grid-row: 3; }
 
 /* ------------------------------------------------------------------ topbar */
 
@@ -278,7 +277,17 @@ main {
   grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
-#film { position: relative; display: grid; place-items: center; min-height: 0; overflow: hidden; }
+/* The row is pinned for the same reason `#stage`'s is. Left implicit it is
+   sized by its content, and the content is the video: `height: 100%` then has no
+   definite box to resolve against, the percentage is dropped, and the video
+   falls back to the shape of the stream - so a 9:16 frame asked for a box 16:9
+   times the stage's width, came out taller than the stage and was clipped at its
+   foot. With the row pinned the video fills the stage and `object-fit: contain`
+   letterboxes the picture, whatever shape the stream arrives in. */
+#film {
+  position: relative; display: grid; place-items: center; min-height: 0; overflow: hidden;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+}
 /* `object-fit: contain` leaves bars on two sides of every frame; they used to be
    black in both themes, which painted over the stage's own ground and kept the
    picture dark inside a light page. The max-* pair is what keeps the picture
@@ -439,6 +448,36 @@ main {
    uses to take the overlay off the film */
 #hud[hidden] { display: none; }
 
+/* ------------------------------------------------------- replay transport */
+
+/*
+ * The bar over a take being replayed.
+ *
+ * A finished run's stream dies with the session, so the picture on the stage is
+ * a file and the only controls over it are the ones written here: without a
+ * pause and a scrubber a take can be watched from its start and no further. It
+ * keeps the HUD's fixed dark chips (it sits on the picture) and sits above it,
+ * which is safe because the HUD is hidden whenever a replay is on screen.
+ */
+#playback {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  z-index: 4; display: flex; align-items: center; gap: 10px;
+  width: min(600px, calc(100% - 28px));
+  padding: 7px 12px; border: 1px solid #ffffff2b; border-radius: 999px;
+  background: #12111ae6; box-shadow: 0 10px 26px #00000059;
+  font-size: 12px;
+}
+#playback[hidden] { display: none; }
+#playback .playback-toggle,
+#playback .playback-stop { flex: 0 0 auto; color: var(--paper); }
+#playback .playback-scrub {
+  flex: 1 1 auto; min-width: 0; height: 4px; margin: 0;
+  accent-color: var(--accent); cursor: pointer;
+}
+#playback .playback-clock {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--paper);
+}
+
 /* ------------------------------------------------------- pre-flight overlay */
 
 /* Almost no ground of its own: while a blot is being painted that painting *is*
@@ -502,6 +541,8 @@ main {
 .panel-controls summary::after { content: "+"; font-size: 14px; color: var(--line); }
 .panel-controls details[open] summary::after { content: "–"; }
 .pad { padding: 0 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+/* The pad's own header: the same way out, at the top where it is in reach. */
+.pad-head { padding: 12px 14px 0; display: flex; }
 
 label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
 label.check { flex-direction: row; align-items: center; gap: 9px; color: var(--text); font-size: 13px; }
@@ -544,13 +585,6 @@ select:disabled, input:disabled { opacity: 0.55; }
 .orbit-key { list-style: none; margin: 4px 0 0; padding: 0; font-size: 11px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* ------------------------------------------------------------- telemetry */
-
-#notes { padding: 0 14px; }
-#notes:empty { display: none; }
-.note {
-  margin: 8px 0 0; padding: 8px 11px; border-radius: var(--radius-sm);
-  background: var(--note-bg); border: 1px solid var(--note-line); color: var(--accent-text); font-size: 12px;
-}
 
 .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 8px 10px; display: flex; flex-direction: column; }
@@ -741,7 +775,6 @@ select:disabled, input:disabled { opacity: 0.55; }
   /* On a phone there is no "left", so the paper takes the top of the screen and
      the options scroll underneath it; the stage keeps the leftover height
      instead of being capped at a fraction of the viewport. */
-  #app[data-mode="manual"] { grid-template-rows: auto auto 1fr; }
   /* The stage hugs the sheet here (--paper-aspect is the film frame's shape,
      set when the paper is built) instead of reserving a fixed slab with the
      paper floating in the middle of it: the blot gets bigger and the options
@@ -758,6 +791,7 @@ select:disabled, input:disabled { opacity: 0.55; }
     max-height: none; overflow-y: auto;
   }
   #app[data-mode="manual"] .pad { padding: 0 12px 14px; }
+  #app[data-mode="manual"] .pad-head { padding: 10px 12px 0; }
   .panel-controls { border-left: 0; border-top: 1px solid var(--line); max-height: 46dvh; }
   #stage { min-height: 0; }
   .brand h1 { font-size: 14px; }

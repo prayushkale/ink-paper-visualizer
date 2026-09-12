@@ -6,7 +6,7 @@ import {
   InvalidTrajectoryError,
   type MultiAngleRequest,
 } from './multiAngle';
-import { CAMERA_MOVE_IDS } from '../presets/camera';
+import { CAMERA_MOVE_IDS, MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS } from '../presets/camera';
 import { arrivalTime } from './extract';
 
 const request = (overrides: Partial<MultiAngleRequest> = {}): MultiAngleRequest => ({
@@ -48,10 +48,13 @@ describe('buildMultiAngleInput', () => {
     }
   });
 
-  it('clamps the duration into the documented 5-15 range', () => {
-    expect(buildMultiAngleInput(request({ duration: 2 })).duration).toBe(5);
-    expect(buildMultiAngleInput(request({ duration: 99 })).duration).toBe(15);
-    expect(buildMultiAngleInput(request({ duration: 7.6 })).duration).toBe(8);
+  it('clamps the duration between the model floor and our own ceiling', () => {
+    // the endpoint would take fifteen seconds, but one blot's clip is capped at
+    // seven: the painting is over inside its first second and the rest is move
+    expect(buildMultiAngleInput(request({ duration: 2 })).duration).toBe(MIN_ANGLE_SECONDS);
+    expect(buildMultiAngleInput(request({ duration: 99 })).duration).toBe(MAX_ANGLE_SECONDS);
+    expect(buildMultiAngleInput(request({ duration: 7.6 })).duration).toBe(MAX_ANGLE_SECONDS);
+    expect(buildMultiAngleInput(request({ duration: 6 })).duration).toBe(6);
   });
 
   it('only ever sends the two expansion modes this endpoint accepts', () => {

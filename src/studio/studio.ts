@@ -7,7 +7,7 @@ import type { RenderedBlot } from '../ink/render';
 import type { PaintFrame } from '../ink/paintReel';
 import { BlotRail, DEFAULT_RAIL_OPTIONS, type BlotJob, type BlotState, type RailPorts, type RailProgress } from '../rail/queue';
 import { createStudioInterpreter, type VisionCaller } from '../rail/interpreter';
-import { buildMultiAngleInput, type MultiAngleInput } from '../angle/multiAngle';
+import { buildMultiAngleInput, clampAngleSeconds, type MultiAngleInput } from '../angle/multiAngle';
 import { MusicBed, generatedScoreBrief, type PinnedTrack } from '../audio/musicBed';
 import { StreamRecorder, type Recording } from '../record/recorder';
 import {
@@ -21,7 +21,7 @@ import {
 import { BudgetGuard } from '../stream/budget';
 import { ChainController, chooseHandoffImage } from '../stream/chain';
 import { createFrameGrabber, type FrameGrabberPort } from '../stream/frameGrabber';
-import { composeWorldPrompt } from '../stream/promptComposer';
+import { composeBlotClipPrompt, composeWorldPrompt } from '../stream/promptComposer';
 import { DirectorSession, realTimer, type DirectorSessionEvents, type Timer } from '../stream/session';
 import { BlotScheduler, type SchedulerEpisode } from '../stream/scheduler';
 import { PromptVersions, buildConfigure, type ChunkInfo, type SessionInfo } from '../stream/protocol';
@@ -499,14 +499,28 @@ export class InkStudio {
           throw new Error(verdict.detail);
         }
         const camera = options.settings.camera;
+        const episode = this.episode();
+        const seconds = clampAngleSeconds(camera.duration);
         const input = buildMultiAngleInput({
           blotId: blot.id,
           imageUrl: blot.url,
           move,
           seed,
-          duration: camera.duration,
+          duration: seconds,
           resolution: camera.resolution,
           promptExpansionMode: camera.promptExpansionMode,
+          // Multi Angle animates the painting it is handed unless it is told
+          // what that painting is a reference for: the mood, the score and the
+          // blot's own reading go in, and so does the one-second switch.
+          prompt: composeBlotClipPrompt({
+            reading: blot.reading ?? null,
+            mood: episode.mood,
+            music: episode.music,
+            moodStrength: episode.moodStrength,
+            camera: CAMERA_MOVES[move] ?? null,
+            seconds,
+            palette: blot.recipe.palette,
+          }),
         });
         const raw = await options.multiAngleSubscribe(input);
         const url = (raw as { video?: { url?: string } })?.video?.url;
@@ -1026,7 +1040,20 @@ export class InkStudio {
         this.log('warn', `direction ${info.promptVersion} rejected: ${info.reason}`);
         this.scheduler.onPromptRejected(info);
       },
-      onAudioApplied: (info) => this.log('server', `audio ${info.behavior}: ${Math.round(info.durationSeconds)}s`),
+      onAudioPending: (info) => {
+        // The server fetches and decodes the pinned track itself, and nothing
+        // plays until that lands: the film opens silent for that stretch, so the
+        // panel says what is happening instead of leaving a mute film looking
+        // like a broken one.
+        this.musicStatus = 'the server is preparing the score';
+        this.log('server', `the score is being prepared${info.behavior ? ` (${info.behavior})` : ''}; the film is silent until it lands`);
+      },
+      onAudioApplied: (info) => {
+        this.musicStatus = this.pinned
+          ? `pinned${this.pinned.durationSeconds ? ` · ${Math.round(this.pinned.durationSeconds)}s` : ''}`
+          : 'scored by the model';
+        this.log('server', `audio ${info.behavior}: ${Math.round(info.durationSeconds)}s`);
+      },
       onAudioRejected: (info) => this.warn(`the pinned track was rejected: ${info.reason} — ${info.error}`),
       onAudioExhausted: () => this.warn('the pinned track ran out, so the rest of this session has no score'),
       onExhausted: (info) => {
@@ -1116,6 +1143,10 @@ export class InkStudio {
     if (!this.session) return;
     this.setStatus('chaining');
     this.log('info', `handing over: ${reason}`);
+    // A handover is a beat with no picture of its own: the next session has to
+    // paint its first chunk before the film moves again. Said out loud, because
+    // a held frame with music still playing under it reads as a frozen film.
+    this.notify('info', 'Changing the session over: the picture holds its last frame while the next one paints its first.');
     const settings = this.options.settings;
     let lastFrameUrl: string | null = null;
     try {

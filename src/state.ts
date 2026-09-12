@@ -1,6 +1,11 @@
 import { defaultInkRecipe } from './ink/recipe';
 import type { InkRecipe } from './ink/types';
-import { defaultCameraConfig, type CameraConfig } from './presets/camera';
+import {
+  MAX_ANGLE_SECONDS,
+  MIN_ANGLE_SECONDS,
+  defaultCameraConfig,
+  type CameraConfig,
+} from './presets/camera';
 import { DEFAULT_MOOD_ID, type MoodId } from './presets/moods';
 import { DEFAULT_MUSIC_ID, type MusicId } from './presets/music';
 
@@ -223,7 +228,15 @@ export function clampNumber(value: number, min: number, max: number): number {
 
 // --------------------------------------------------------------- defaults
 
-export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.`;
+/**
+ * The prompt behind the hand-painted route's one imagining.
+ *
+ * The clip it asks for is the same shape as the one the studio makes for itself:
+ * at most seven seconds, opening on the painting and over the painting inside
+ * the first second, with the mood and the score appended by
+ * `composeBlotClipBrief` rather than left out of the picture.
+ */
+export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colours and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams - and commit to it. Then write ONE vivid video-generation prompt for a live-action cinematic clip, no more than seven seconds long, that STARTS exactly from this painting as its first frame: within the first second the ink has become real footage of the thing you imagined, and it is never a painting again. Name the subject, the real material it is made of, what it does, the camera move, the light and the mood, and let the film mood and the score named below colour all of it. Output ONLY the video prompt text, under 150 words, no preamble.`;
 
 /** Asks the vision model for machine-readable direction, not prose. */
 export const DEFAULT_STUDIO_PROMPT = `You are the director of a photoreal, live-action film: one continuous, unbroken take that the viewer watches live. You are shown one real ink-and-fold painting at a time, and you are the only one who decides which real place it is a reference for.
@@ -289,7 +302,7 @@ export const QUALITY_PRESETS: Record<QualityPreset, QualityPresetSpec> = {
     label: 'High',
     blurb: '1080p, a four-angle orbit set, a ten-minute session.',
     stream: { resolution: '1080p', memory: 24 },
-    camera: { enabled: true, anglesPerBlot: 4, resolution: '768P', duration: 8 },
+    camera: { enabled: true, anglesPerBlot: 4, resolution: '768P', duration: MAX_ANGLE_SECONDS },
     budget: { sessionCapSeconds: 600, sessionCapUsd: 30, dailyCapUsd: 120 },
   },
 };
@@ -343,6 +356,16 @@ export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4.1-flash';
  * never a deliberate choice, so it is migrated forward rather than honoured.
  */
 const SUPERSEDED_OPENROUTER_MODELS = ['z-ai/glm-5.3-flash'];
+
+/**
+ * Vision prompts this app used to ship. The wording is not decoration: it is
+ * what tells the model how long the clip is and how fast the painting becomes
+ * the film, so a stored copy of an old default is migrated forward the same way
+ * a superseded model is. Anything the user actually typed is left alone.
+ */
+const SUPERSEDED_VISION_PROMPTS = [
+  `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.`,
+];
 
 export function defaultSettings(): Settings {
   const base: Settings = {
@@ -409,6 +432,7 @@ export function mergeSettings(base: Settings, patch: unknown): Settings {
   // runtime-only fields must never arrive from a stored or shared payload
   out.music.resolvedUrl = null;
   out.camera.anglesPerBlot = clampNumber(Math.round(out.camera.anglesPerBlot), 0, 4);
+  out.camera.duration = clampNumber(Math.round(out.camera.duration), MIN_ANGLE_SECONDS, MAX_ANGLE_SECONDS);
   out.stream.memory = clampNumber(Math.round(out.stream.memory), 1, 50);
   out.budget.sessionCapSeconds = clampNumber(Math.round(out.budget.sessionCapSeconds), 10, 900);
   out.moodStrength = clampNumber(out.moodStrength, 0, 1);
@@ -429,6 +453,9 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> | null = safeStor
       // current one; a model the user typed in is left alone.
       if (SUPERSEDED_OPENROUTER_MODELS.includes(merged.openrouterModel)) {
         merged.openrouterModel = DEFAULT_OPENROUTER_MODEL;
+      }
+      if (SUPERSEDED_VISION_PROMPTS.includes(merged.visionPrompt)) {
+        merged.visionPrompt = DEFAULT_VISION_PROMPT;
       }
       // a blob stored before presets existed has no deliberate quality choice,
       // so the shipped default (cheapest) is applied over whatever was saved

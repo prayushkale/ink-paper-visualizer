@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CLIP_SWITCH_SECONDS,
   PRESERVE_CLAUSE,
   clampPrompt,
+  clipOpeningClause,
+  composeBlotClipBrief,
+  composeBlotClipPrompt,
   composeDirection,
   composeMoodShift,
   composeVisionPrompt,
@@ -233,6 +237,99 @@ describe('composeMoodShift', () => {
     expect(shift).toMatch(/continuity of the take/);
     expect(shift).toContain(MOODS.playful.lead);
     expect(shift).toContain(MOODS.playful.soundBrief);
+  });
+});
+
+/** Prompts open their clauses with a capital, so comparisons go lower case. */
+const lowered = (text: string): string => text.toLowerCase();
+
+describe('composeBlotClipPrompt', () => {
+  const clip = (overrides: Partial<Parameters<typeof composeBlotClipPrompt>[0]> = {}) =>
+    composeBlotClipPrompt({
+      reading: reading(),
+      mood,
+      music,
+      moodStrength: 0.7,
+      camera: CAMERA_MOVES['orbit-right'],
+      seconds: 7,
+      palette,
+      ...overrides,
+    });
+
+  it('carries the settings the rest of the film is made of', () => {
+    const text = clip();
+    // the mood the user chose, and the score, are what a blot's own clip was
+    // missing: Multi Angle animates the painting it is handed without them
+    expect(text).toContain(mood.label);
+    expect(text).toContain(mood.lead);
+    expect(text).toContain(music.label);
+    expect(text).toContain(`${music.bpm} BPM`);
+    expect(text).toContain(music.brief);
+    // the accent opens a sentence, so it arrives capitalised
+    expect(lowered(text)).toContain(music.accent.toLowerCase());
+  });
+
+  it('states the clip length it was asked for, and the one-second switch', () => {
+    expect(clip({ seconds: 7 })).toMatch(/7 seconds long/);
+    expect(clip()).toContain(clipOpeningClause());
+    expect(clip()).toMatch(/first frame is the ink painting/);
+  });
+
+  it('describes the blot as a reference for a real scene, never as a painting', () => {
+    const text = clip();
+    expect(lowered(text)).toContain(reading().subject.toLowerCase());
+    expect(text).toContain(reading().prompt);
+    expect(text).toMatch(/live-action photography/);
+    expect(text).toMatch(/no paper, no pigment, no brush marks/i);
+  });
+
+  it('agrees with the camera move the trajectory is making', () => {
+    expect(lowered(clip({ camera: CAMERA_MOVES['crane-up'] }))).toContain(CAMERA_MOVES['crane-up'].phrase.toLowerCase());
+    // a mood-only direction has no move to name
+    expect(clip({ camera: null })).not.toMatch(/CAMERA:/);
+  });
+
+  it('falls back to the mood alone for a blot the vision model never read', () => {
+    const text = clip({ reading: null, palette: [] });
+    expect(text).not.toMatch(/SUBJECT:/);
+    expect(text).toContain(mood.label);
+  });
+});
+
+describe('composeBlotClipBrief', () => {
+  const brief = composeBlotClipBrief({
+    basePrompt: 'You are a visionary film director.',
+    mood,
+    music,
+    moodStrength: 0.7,
+    seconds: 7,
+  });
+
+  it('keeps the user\'s prompt as the brief and appends the run context', () => {
+    expect(brief.startsWith('You are a visionary film director.')).toBe(true);
+    expect(brief).toMatch(/RUNNING CONTEXT/);
+    expect(brief).toContain(mood.lead);
+    expect(brief).toContain(music.brief);
+  });
+
+  it('asks for a clip of seven seconds and the one-second switch', () => {
+    expect(brief).toMatch(/at most 7 seconds/);
+    expect(brief).toContain(clipOpeningClause());
+  });
+
+  it('presses the mood harder as the pressure rises', () => {
+    const soft = composeBlotClipBrief({ basePrompt: 'x', mood, music, moodStrength: 0.1, seconds: 7 });
+    const hard = composeBlotClipBrief({ basePrompt: 'x', mood, music, moodStrength: 0.9, seconds: 7 });
+    expect(soft).toMatch(/opening colour/);
+    expect(hard).toMatch(/Commit fully/);
+  });
+});
+
+describe('clipOpeningClause', () => {
+  it('is one second unless it is asked for another window', () => {
+    expect(CLIP_SWITCH_SECONDS).toBe(1);
+    expect(clipOpeningClause()).toMatch(/first second/);
+    expect(clipOpeningClause(2)).toMatch(/first 2 seconds/);
   });
 });
 

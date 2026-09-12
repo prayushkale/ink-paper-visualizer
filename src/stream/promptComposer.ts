@@ -19,6 +19,32 @@ export function paletteSentence(colors: readonly string[]): string {
  */
 export const PRESERVE_CLAUSE = 'Preserve the live-action photographic look of every frame and everything already established.';
 
+/**
+ * How much of a blot's clip may still be the painting.
+ *
+ * A clip opens on the blot itself, because the blot is the image the model is
+ * handed, and left to itself the model animates that painting for the whole take
+ * - which is what made the film arrive on an inky frame. The switch to real
+ * footage is stated as one second wherever a clip is asked for, so the studio's
+ * orbit takes and the hand-painted imagining agree about the first second.
+ */
+export const CLIP_SWITCH_SECONDS = 1;
+
+/** The one wording of "the painting is over inside a second", shared by both. */
+export function clipOpeningClause(seconds: number = CLIP_SWITCH_SECONDS): string {
+  const window = seconds === 1 ? 'first second' : `first ${seconds} seconds`;
+  return `The clip opens on the painting and the switch is over inside its ${window}: the first frame is the ink painting, and by the end of it the picture is live-action footage of the real scene - at no point after that is it a painting again.`;
+}
+
+/** How hard the mood is pressed, in one place so every prompt presses equally. */
+export function moodPressureClause(moodStrength: number): string {
+  return moodStrength >= 0.75
+    ? 'Commit fully to it; let it colour every frame.'
+    : moodStrength >= 0.4
+      ? 'Let it set the tone without smothering the imagery.'
+      : 'Treat it as the opening colour and let the picture drift from it.';
+}
+
 export interface WorldPromptInput {
   mood: MoodPreset;
   music: MusicPreset;
@@ -105,6 +131,81 @@ export function composeVisionPrompt(input: VisionPromptInput): string {
     history,
     '',
     `This is beat ${input.beatIndex + 1}. Reply with the JSON object only.`,
+  ].join('\n');
+}
+
+export interface BlotClipPromptInput {
+  /** What the vision model saw in the blot, when it has been read. */
+  reading: Pick<BlotReading, 'subject' | 'prompt'> | null;
+  mood: MoodPreset;
+  music: MusicPreset;
+  moodStrength: number;
+  /** The move the camera trajectory is making, so the words agree with it. */
+  camera: CameraMove | null;
+  /** Clip length in seconds. */
+  seconds: number;
+  /** The colours the blot was painted in, when it has them. */
+  palette?: readonly string[];
+}
+
+/**
+ * The prompt for one blot's own clip: the Multi Angle take that blot is orbited
+ * with, and the take whose held final pose the film arrives on.
+ *
+ * Multi Angle takes a prompt, and without one the model keeps the scene frozen
+ * and animates the painting it was handed. This says what the blot is a
+ * reference for instead, in the same keys as the rest of the film - the world,
+ * the mood that is set, and the score - so a blot's clip stops being the one
+ * paid-for picture in the app that ignores the settings beside it.
+ */
+export function composeBlotClipPrompt(input: BlotClipPromptInput): string {
+  const { mood, music, reading, camera } = input;
+  const subject = reading?.subject?.trim() ?? '';
+  const beat = reading?.prompt?.trim() ?? '';
+  const lines = [
+    `A single unbroken shot of live-action photography, ${input.seconds} seconds long, 24 fps: a real place in real materials - skin, water, dust, stone, metal, fabric, weather - under practical light, with natural motion blur and true optics.`,
+    `OPENING: the attached ink painting is the shot's first frame, and it is a reference photograph of a real scene rather than the picture's medium. ${clipOpeningClause()}`,
+  ];
+  if (subject !== '' || beat !== '') {
+    lines.push(`SUBJECT: ${subject !== '' ? `${capitalise(subject)}. ` : ''}${beat}`.trim());
+  }
+  lines.push(`MOOD: ${mood.label} - ${mood.lead} ${moodPressureClause(input.moodStrength)}`);
+  lines.push(`SCORE: ${music.label}, about ${music.bpm} BPM - ${music.brief}. ${capitalise(music.accent)}; cut the movement to that pulse.`);
+  if (camera) lines.push(`CAMERA: ${capitalise(camera.phrase)}.`);
+  if (input.palette && input.palette.length > 0) lines.push(paletteSentence(input.palette));
+  lines.push('No paper, no pigment, no brush marks, no wash, no drawing, no illustration and no animation on screen, and no on-screen text, logos or legible signage.');
+  return lines.join('\n\n');
+}
+
+export interface BlotClipBriefInput {
+  /** The user's prompt, kept as the opening brief. */
+  basePrompt: string;
+  mood: MoodPreset;
+  music: MusicPreset;
+  moodStrength: number;
+  /** Clip length in seconds. */
+  seconds: number;
+}
+
+/**
+ * The prompt behind "Imagine this blot": the hand-painted route's one clip.
+ *
+ * The user's own prompt stays the brief and the run's own settings are appended
+ * to it as context - the shape `composeVisionPrompt` gives the studio's readings
+ * - so an imagining made with a mood and a score set beside it carries both,
+ * instead of describing a clip in a vacuum.
+ */
+export function composeBlotClipBrief(input: BlotClipBriefInput): string {
+  return [
+    input.basePrompt.trim(),
+    '',
+    'RUNNING CONTEXT',
+    `- Film mood: ${input.mood.label}. ${input.mood.lead}`,
+    `- Mood pressure: ${input.moodStrength.toFixed(2)} of 1, where 1 means commit fully to the mood. ${moodPressureClause(input.moodStrength)}`,
+    `- Score: ${input.music.label} at about ${input.music.bpm} BPM - ${input.music.brief}.`,
+    `- Length: one moment of at most ${input.seconds} seconds, with an arc that lands inside it rather than a sequence of events.`,
+    `- Switch: ${clipOpeningClause()}`,
+    '- Never write about ink, paper, pigment, brushwork, painting or animation being on screen.',
   ].join('\n');
 }
 
