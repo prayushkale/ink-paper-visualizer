@@ -70,7 +70,7 @@ export function renderControls(
       <p class="muted small">${esc(QUALITY_PRESETS[settings.quality].blurb)} This writes resolution, orbit takes and the budget; every value stays editable below.</p>
     </section>
 
-    <details open>
+    <details data-section="stream">
       <summary>Stream</summary>
       <div class="pad">
         ${lockedNote}
@@ -117,7 +117,7 @@ export function renderControls(
       </div>
     </details>
 
-    <details open>
+    <details data-section="mood">
       <summary>Mood</summary>
       <div class="pad">
         <div class="chips">
@@ -135,7 +135,7 @@ export function renderControls(
       </div>
     </details>
 
-    <details>
+    <details data-section="music">
       <summary>Music</summary>
       <div class="pad">
         <div class="segmented">
@@ -160,7 +160,7 @@ export function renderControls(
       </div>
     </details>
 
-    <details open>
+    <details data-section="camera">
       <summary>Camera (Multi Angle)</summary>
       <div class="pad">
         <label class="check">
@@ -201,7 +201,7 @@ export function renderControls(
       </div>
     </details>
 
-    <details>
+    <details data-section="budget">
       <summary>Budget</summary>
       <div class="pad">
         <label>Session cap <span class="muted">${usd(settings.budget.sessionCapUsd)}</span>
@@ -226,7 +226,7 @@ export function renderControls(
       </div>
     </details>
 
-    <details>
+    <details data-section="vision">
       <summary>Vision &amp; prompts</summary>
       <div class="pad">
         <label>Vision model (OpenRouter)
