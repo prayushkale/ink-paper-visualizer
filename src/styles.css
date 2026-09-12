@@ -160,12 +160,24 @@ html, body {
   overscroll-behavior-y: none;
 }
 
+/*
+ * Four tracks, one per child in document order: the bar, the pre-flight notes,
+ * the three panels, the strip. Every child is pinned to its own row, because
+ * auto-placement counts only the children that are actually in the grid - an
+ * empty `#notes` or a hidden `#filmstrip` drops out and hands the stretchy
+ * track to whatever follows, which left the panels sized by their content and
+ * a dead band at the bottom of the window.
+ */
 #app {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: 100dvh;
   padding-bottom: env(safe-area-inset-bottom);
 }
+#app > #topbar { grid-row: 1; }
+#app > #notes { grid-row: 2; }
+#app > main { grid-row: 3; }
+#app > #filmstrip { grid-row: 4; }
 
 /* ------------------------------------------------------------------ topbar */
 
@@ -247,8 +259,11 @@ main {
    the painting mode, which shows a sheet of paper, wants the light ground. */
 #stage { position: relative; min-height: 0; background: var(--stage-bg); display: grid; }
 #film { position: relative; display: grid; place-items: center; min-height: 0; }
+/* `object-fit: contain` leaves bars on two sides of every frame; they used to be
+   black in both themes, which painted over the stage's own ground and kept the
+   picture dark inside a light page. */
 #film video {
-  width: 100%; height: 100%; object-fit: contain; background: #000;
+  width: 100%; height: 100%; object-fit: contain; background: var(--stage-bg);
   display: block;
 }
 #paper { display: none; }
@@ -473,7 +488,7 @@ select:disabled, input:disabled { opacity: 0.55; }
 
 /* ------------------------------------------------------------ fullscreen */
 
-#film:fullscreen { background: #000; }
+#film:fullscreen { background: var(--stage-bg); }
 #film:fullscreen video { width: 100vw; height: 100vh; }
 
 /* ------------------------------------------------------------- filmstrip */
@@ -514,7 +529,10 @@ select:disabled, input:disabled { opacity: 0.55; }
 #app[data-watch="1"] .panel-controls,
 #app[data-watch="1"] .panel-filmstrip { display: none; }
 #app[data-watch="1"] main { grid-template-columns: 1fr; }
-#app[data-watch="1"] #film video { height: 100dvh; }
+/* The film runs the width of the window, but it is `100%` of the stage rather
+   than `100dvh`: the bar above it is still there, and a viewport-height film
+   hung 59px past the bottom edge of a full-height shell. */
+#app[data-watch="1"] #film video { height: 100%; }
 #app[data-watch="1"] #stage { min-height: 0; }
 
 /* ---------------------------------------------------------------- narrow */
@@ -522,7 +540,6 @@ select:disabled, input:disabled { opacity: 0.55; }
 @media (max-width: 1080px) {
   main { grid-template-columns: 1fr minmax(280px, 340px); }
   .panel-rail { display: none; }
-  #app { grid-template-rows: auto auto 1fr auto; }
   .panel-filmstrip {
     display: block; border-top: 1px solid var(--line);
     background: var(--panel); overflow: hidden;
@@ -532,7 +549,8 @@ select:disabled, input:disabled { opacity: 0.55; }
 }
 
 @media (max-width: 720px) {
-  #app { grid-template-rows: auto auto auto 1fr auto; }
+  /* `#app` keeps its four tracks here: the panels stack inside `main`, they are
+     not additional children of the shell. */
   main { grid-template-columns: 1fr; grid-template-rows: minmax(38dvh, 44dvh) auto; }
   .panel-controls { border-left: 0; border-top: 1px solid var(--line); max-height: 46dvh; }
   #stage { min-height: 0; }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyTheme, isTheme, otherTheme, stageColor, systemTheme, THEME_COLORS, THEME_EVENT } from './theme';
+import { applyTheme, isTheme, otherTheme, stageColor, THEME_COLORS, THEME_EVENT } from './theme';
 
 /**
  * The document element, as much of it as the module touches. There is no jsdom in
@@ -25,10 +25,6 @@ describe('theme', () => {
   it('toggles to the other one', () => {
     expect(otherTheme('dark')).toBe('light');
     expect(otherTheme('light')).toBe('dark');
-  });
-
-  it('falls back to dark where there is no system to ask', () => {
-    expect(systemTheme()).toBe('dark');
   });
 
   it('writes the attribute the stylesheet reads, and the chrome tint with it', () => {

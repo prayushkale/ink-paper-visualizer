@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { createPrefsStore, defaultPrefs, loadPrefs, savePrefs } from './prefs';
-import { systemTheme } from './theme';
 
 /** A localStorage stand-in: the module only ever get/setItems. */
 function fakeStorage(seed: Record<string, string> = {}): Storage {
@@ -49,13 +48,14 @@ describe('page preferences', () => {
     expect('nonsense' in loaded).toBe(false);
   });
 
-  it('opens on the system theme until the user picks one', () => {
-    expect(defaultPrefs().theme).toBe(systemTheme());
-    expect(defaultPrefs('light').theme).toBe('light');
-    const storage = fakeStorage({ [KEY]: JSON.stringify({ theme: 'light' }) });
-    expect(loadPrefs(storage).theme).toBe('light');
+  it('opens light until the user picks a palette', () => {
+    // Not the operating system's preference: a first visit is a sheet of paper.
+    expect(defaultPrefs().theme).toBe('light');
+    expect(defaultPrefs('dark').theme).toBe('dark');
+    const storage = fakeStorage({ [KEY]: JSON.stringify({ theme: 'dark' }) });
+    expect(loadPrefs(storage).theme).toBe('dark');
     // anything that is not a theme leaves the default in place
-    expect(loadPrefs(fakeStorage({ [KEY]: JSON.stringify({ theme: 1 }) })).theme).toBe(systemTheme());
+    expect(loadPrefs(fakeStorage({ [KEY]: JSON.stringify({ theme: 1 }) })).theme).toBe('light');
   });
 
   it('clamps a hand-edited brush into the sliders that show it', () => {

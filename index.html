@@ -8,18 +8,15 @@
     // The theme has to be on the document before the browser paints, which is
     // earlier than the module bundle runs - a theme applied from there shows as
     // a flash of the wrong palette. This is the same read the prefs store does
-    // (see src/ui/prefs.ts and src/ui/theme.ts): what was chosen, else the
-    // system's answer, else dark.
+    // (see src/ui/prefs.ts): what the user chose, else light, the app's own
+    // default. The operating system is deliberately not consulted.
     (() => {
-      let theme = '';
+      let theme = 'light';
       try {
         const stored = JSON.parse(localStorage.getItem('inkfilm.prefs.v1') || '{}');
         if (stored && (stored.theme === 'light' || stored.theme === 'dark')) theme = stored.theme;
       } catch {
-        /* corrupt or blocked storage: the system still has an answer */
-      }
-      if (!theme) {
-        theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        /* corrupt or blocked storage: the default still stands */
       }
       document.documentElement.dataset.theme = theme;
       const meta = document.querySelector('meta[name="theme-color"]');

@@ -27,16 +27,6 @@ export const THEME_COLORS: Record<Theme, string> = { dark: '#0d0c10', light: '#f
 /** What the stage behind the paper falls back to when the stylesheet cannot be read. */
 const STAGE_FALLBACK = '#1a1a1e';
 
-/**
- * What the operating system asked for. A first visit has nothing else to go on,
- * and a machine with no preference is treated as dark, because that is the
- * palette the app was designed on.
- */
-export function systemTheme(): Theme {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark';
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
 export function isTheme(value: unknown): value is Theme {
   return value === 'dark' || value === 'light';
 }

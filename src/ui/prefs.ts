@@ -11,7 +11,7 @@
  * this can survive in memory: it is read back once at boot.
  */
 
-import { isTheme, systemTheme, type Theme } from './theme';
+import { isTheme, type Theme } from './theme';
 
 export type AppMode = 'studio' | 'manual';
 
@@ -31,19 +31,21 @@ export interface UiPrefs {
    * link always opens watched); this is only the fallback.
    */
   watch: boolean;
-  /** Light or dark. A first visit takes the system's answer. */
+  /** Light or dark. A first visit opens light; see `defaultPrefs`. */
   theme: Theme;
 }
 
 const LS_KEY = 'inkfilm.prefs.v1';
 
 /**
- * The theme is the one preference with a sensible answer before the user has
- * made a choice, so the system supplies it; everything else opens on the app's
- * own default. Injectable for the sake of tests that must not depend on the
- * machine they run on.
+ * What the page opens on with nothing stored. The theme is the one preference
+ * that has to be answered before the user has chosen, and the answer is the
+ * page's own default rather than the operating system's: the app is a sheet of
+ * paper in a studio, so it opens on paper. Someone who wants the dark palette
+ * says so once and the store keeps it. Injectable for the sake of tests that
+ * must not depend on the machine they run on.
  */
-export function defaultPrefs(theme: Theme = systemTheme()): UiPrefs {
+export function defaultPrefs(theme: Theme = 'light'): UiPrefs {
   return {
     mode: 'studio',
     brush: { color: '', radius: 40, wetness: 0.5 },
