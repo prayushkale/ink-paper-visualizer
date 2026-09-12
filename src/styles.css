@@ -256,8 +256,16 @@ main {
 .panel-controls { border-left: 1px solid var(--line); }
 
 /* The stage is the film, so it stays dark under the video in both themes; only
-   the painting mode, which shows a sheet of paper, wants the light ground. */
-#stage { position: relative; min-height: 0; background: var(--stage-bg); display: grid; }
+   the painting mode, which shows a sheet of paper, wants the light ground.
+   Its one track is pinned to the box the stage was given: left implicit it is
+   sized by its content, and the canvas reports an intrinsic 300px before the
+   renderer has measured it — on a stage narrower than that the container grows
+   to fit the canvas it is supposed to be sizing, and the paper never shrinks
+   back to the screen. */
+#stage {
+  position: relative; min-height: 0; background: var(--stage-bg); display: grid;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+}
 #film { position: relative; display: grid; place-items: center; min-height: 0; }
 /* `object-fit: contain` leaves bars on two sides of every frame; they used to be
    black in both themes, which painted over the stage's own ground and kept the
@@ -266,13 +274,20 @@ main {
   width: 100%; height: 100%; object-fit: contain; background: var(--stage-bg);
   display: block;
 }
-#paper { display: none; }
+#paper { display: none; min-height: 0; }
 #filmstrip { display: none; }
 
 /* studio hides the paper; manual hides the film */
 #app[data-mode="manual"] #film { display: none; }
-#app[data-mode="manual"] #paper { display: block; }
 #app[data-mode="studio"] #paper { display: none; }
+/* The paper has to own its box before the renderer measures it: three.js sizes
+   the canvas from the container, and a container sized by the canvas it holds
+   collapses to nothing. `touch-action: none` keeps a drag from scrolling the
+   page away instead of painting a trail. */
+#app[data-mode="manual"] #paper {
+  display: block; width: 100%; height: 100%; min-height: 0; touch-action: none;
+}
+#paper canvas { display: block; }
 
 /* ------------------------------------------------------------------ rail */
 
@@ -528,6 +543,15 @@ select:disabled, input:disabled { opacity: 0.55; }
 
 #app[data-mode="manual"] .panel-filmstrip { display: none; }
 #app[data-mode="manual"] #rail { display: none; }
+/* telemetry reports on the film; a hand-painted blot has no film yet */
+#app[data-mode="manual"] #telemetry { display: none; }
+/* With the rail hidden, auto-placement drops the stage into the rail's narrow
+   first column and leaves the options sitting in the middle of a two-column
+   page. Both children are pinned where they belong instead: the paint options
+   down the left, the paper filling everything else, centred by the camera. */
+#app[data-mode="manual"] main { grid-template-columns: minmax(300px, 360px) 1fr; }
+#app[data-mode="manual"] #controls { grid-column: 1; grid-row: 1; border-right: 1px solid var(--line); }
+#app[data-mode="manual"] #stage { grid-column: 2; grid-row: 1; }
 
 .panel-controls h2 {
   margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
@@ -579,6 +603,26 @@ select:disabled, input:disabled { opacity: 0.55; }
   /* `#app` keeps its four tracks here: the panels stack inside `main`, they are
      not additional children of the shell. */
   main { grid-template-columns: 1fr; grid-template-rows: minmax(38dvh, 44dvh) auto; }
+  /* On a phone there is no "left", so the paper takes the top of the screen and
+     the options scroll underneath it; the stage keeps the leftover height
+     instead of being capped at a fraction of the viewport. */
+  #app[data-mode="manual"] { grid-template-rows: auto auto 1fr; }
+  /* The stage hugs the sheet here (--paper-aspect is the film frame's shape,
+     set when the paper is built) instead of reserving a fixed slab with the
+     paper floating in the middle of it: the blot gets bigger and the options
+     get the rest of the screen. The cap is what keeps a portrait film from
+     claiming the whole phone — the camera letterboxes the sheet inside
+     whatever box it is given. */
+  #app[data-mode="manual"] main { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  #app[data-mode="manual"] #stage {
+    grid-column: 1; grid-row: 1; min-height: 0; width: 100%;
+    aspect-ratio: var(--paper-aspect, 1.5); max-height: 46dvh;
+  }
+  #app[data-mode="manual"] #controls {
+    grid-column: 1; grid-row: 2; border-right: 0; border-top: 1px solid var(--line);
+    max-height: none; overflow-y: auto;
+  }
+  #app[data-mode="manual"] .pad { padding: 0 12px 14px; }
   .panel-controls { border-left: 0; border-top: 1px solid var(--line); max-height: 46dvh; }
   #stage { min-height: 0; }
   .brand h1 { font-size: 14px; }

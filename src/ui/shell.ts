@@ -382,6 +382,10 @@ export class StudioShell {
    * drags, and any open section.
    */
   private renderControlsIfNeeded(view: StudioView, settings: Settings): void {
+    // the hand-painted route owns this column while it is open: a studio
+    // heartbeat (health resolving, the rail pumping) would otherwise rebuild
+    // the settings over the paint pad mid-brush
+    if (this.elements.app.dataset.mode === 'manual') return;
     // spectator mode hides the controls entirely, so there is nothing to build
     if (this.watchOnly) {
       this.elements.controlBody.innerHTML = '';

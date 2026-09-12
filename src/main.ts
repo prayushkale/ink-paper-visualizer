@@ -67,6 +67,11 @@ async function ensurePaper(): Promise<void> {
     ]);
     const host = document.getElementById('paper')!;
     const created = new PaperClass(canvasForAspect(settings.stream.aspectRatio));
+    // CSS sizes the phone's stage off the sheet's shape; the camera fit keeps
+    // the sheet centred inside it either way
+    document.documentElement.style.setProperty(
+      '--paper-aspect', String(created.spec.width / created.spec.height),
+    );
     const view = new Scene(created, host);
     wirePainting(view, created, () => dropOptions);
     paper = created;
