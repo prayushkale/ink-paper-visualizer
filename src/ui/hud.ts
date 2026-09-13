@@ -22,6 +22,7 @@ const PREPARING_COPY: Record<string, string> = {
   painting: 'painting the first blots',
   hosting: 'hosting them where the model can fetch them',
   imagining: 'asking the vision model what they could be',
+  realising: 'turning each imagining into a photograph',
   shooting: 'shooting the camera orbits',
   ready: 'opening the session',
   stalled: 'the rail is struggling',
@@ -48,7 +49,6 @@ export function renderPreparing(root: HTMLElement, view: StudioView): void {
     ? `<span>views ${Math.min(preparing.anglesReady, preparing.anglesWanted)}/${preparing.anglesWanted}</span>`
     : '';
   const dropped = preparing.failed > 0 ? `<span>${preparing.failed} dropped</span>` : '';
-  const orbited = preparing.anglesWanted > 0 ? ' and orbited' : '';
   root.hidden = false;
   root.innerHTML = `
     <div class="preparing-card">
@@ -62,8 +62,9 @@ export function renderPreparing(root: HTMLElement, view: StudioView): void {
         <span>${formatDuration(preparing.elapsedMs)}</span>
       </p>
       <p class="preparing-hint">
-        Every blot is painted, hosted and read by the vision model${orbited} before the
-        session can open on it. Nothing is billed until the film starts.
+        Every blot is painted, hosted, read by the vision model and realised as a
+        photograph before the session can open on it${preparing.anglesWanted > 0 ? ', and its camera takes are shot while the film is already running' : ''}.
+        The film's own session is only billed once it opens.
       </p>
     </div>`;
 }

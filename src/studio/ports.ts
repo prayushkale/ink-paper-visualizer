@@ -1,6 +1,7 @@
 import { falWmaOpener, createWmaTransport, type DirectorTransport } from '../stream/transport';
 import { fal, uploadFile } from '../fal';
 import { MULTI_ANGLE_ENDPOINT, type MultiAngleInput } from '../angle/multiAngle';
+import { IMAGINE_ENDPOINT, buildImagineInput, generateImagining } from '../stream/imagine';
 import { createFrameExtractor } from '../angle/extract';
 import { createMusicBedPorts } from '../audio/musicBed';
 import { renderBlot } from '../ink/render';
@@ -13,6 +14,7 @@ export type StudioRuntimePorts = Pick<
   | 'transport'
   | 'vision'
   | 'multiAngleSubscribe'
+  | 'imagineImage'
   | 'upload'
   | 'render'
   | 'extractArrivalFrame'
@@ -50,6 +52,13 @@ export function createRuntimePorts(): StudioRuntimePorts {
     async multiAngleSubscribe(input: MultiAngleInput) {
       const result = await fal.subscribe(MULTI_ANGLE_ENDPOINT, { input });
       return result.data;
+    },
+    /** The imagining: the blot is edited into the photograph the film is made of. */
+    async imagineImage({ imageUrl, reading, mood, aspectRatio, seed }) {
+      return generateImagining(
+        buildImagineInput({ imageUrl, reading, mood, aspectRatio, seed }),
+        { subscribe: async (input) => (await fal.subscribe(IMAGINE_ENDPOINT, { input })).data },
+      );
     },
     upload: (blob, name) => uploadFile(blob, name),
     render: (recipe) => renderBlot(recipe),

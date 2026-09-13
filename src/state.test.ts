@@ -19,7 +19,6 @@ import {
 } from './state';
 import { MOOD_IDS } from './presets/moods';
 import { MUSIC_IDS } from './presets/music';
-import { CAMERA_MOVE_IDS, MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS } from './presets/camera';
 import { BLOT_MARKS } from './ink/recipe';
 
 const PROMO_DAY = new Date('2026-09-10T12:00:00Z');
@@ -55,18 +54,14 @@ describe('rates', () => {
 });
 
 describe('planDestinations', () => {
-  it('lands one destination per 10 s chunk', () => {
-    expect(planDestinations(120, 0)).toEqual({ beats: 12, blots: 12, beatsPerBlot: 1 });
+  it('counts one blot per 10 s chunk', () => {
+    expect(planDestinations(120)).toEqual({ beats: 12, blots: 12 });
   });
-  it('spends the angle views of a blot before moving on', () => {
-    expect(planDestinations(120, 2)).toEqual({ beats: 12, blots: 4, beatsPerBlot: 3 });
-    expect(planDestinations(120, 4)).toEqual({ beats: 12, blots: 2, beatsPerBlot: 5 });
-  });
-  it('always finds at least one blot once there is a chunk', () => {
-    expect(planDestinations(30, 2).blots).toBe(1);
+  it('counts a partial chunk as no blot at all', () => {
+    expect(planDestinations(35).blots).toBe(3);
   });
   it('reports nothing for an empty run', () => {
-    expect(planDestinations(0, 2)).toEqual({ beats: 0, blots: 0, beatsPerBlot: 3 });
+    expect(planDestinations(0)).toEqual({ beats: 0, blots: 0 });
   });
 });
 
@@ -111,19 +106,19 @@ describe('estimateRun', () => {
 
   it('prices the angle takes separately, per resolution', () => {
     const estimate = estimateRun({ ...base, anglesPerBlot: 2 }, PROMO_DAY);
-    // 12 beats over 3 beats per blot -> 4 blots -> 8 takes of 5 s at 480p
-    expect(estimate.blots).toBe(4);
-    expect(estimate.angleTakes).toBe(8);
-    expect(estimate.angleSeconds).toBe(40);
-    expect(estimate.angleUsd).toBeCloseTo(0.5);
-    expect(estimate.totalUsd).toBeCloseTo(2.9);
+    // 12 chunks: one blot each, 2 takes of 5 s at 480p apiece
+    expect(estimate.blots).toBe(12);
+    expect(estimate.angleTakes).toBe(24);
+    expect(estimate.angleSeconds).toBe(120);
+    expect(estimate.angleUsd).toBeCloseTo(1.5);
+    expect(estimate.totalUsd).toBeCloseTo(3.9);
   });
 
   it('charges more for angle takes at 768p after the promo', () => {
     const promo = estimateRun({ ...base, anglesPerBlot: 2, angleResolution: '768P' }, PROMO_DAY);
     const list = estimateRun({ ...base, anglesPerBlot: 2, angleResolution: '768P' }, LIST_DAY);
-    expect(promo.angleUsd).toBeCloseTo(0.8);
-    expect(list.angleUsd).toBeCloseTo(3.2);
+    expect(promo.angleUsd).toBeCloseTo(2.4);
+    expect(list.angleUsd).toBeCloseTo(9.6);
     expect(list.directorUsd).toBeCloseTo(9.6);
   });
 
@@ -168,7 +163,6 @@ describe('defaultSettings', () => {
     // one that needs no track to be dropped in first
     expect(settings.music.mode).toBe('generated');
     expect(settings.camera.enabled).toBe(false);
-    expect(settings.camera.moves.every((move) => CAMERA_MOVE_IDS.includes(move))).toBe(true);
     expect(settings.budget).toEqual(DEFAULT_BUDGET);
     expect(settings.ink.blotCount).toBe(BLOT_MARKS);
     expect(settings.manualModeEnabled).toBe(true);
@@ -188,7 +182,7 @@ describe('defaultSettings', () => {
     const medium = QUALITY_PRESETS.medium;
     const high = QUALITY_PRESETS.high;
     expect(low.camera.enabled).toBe(false);
-    expect(low.camera.anglesPerBlot).toBe(0);
+    expect(medium.camera.enabled).toBe(true);
     expect(low.stream.resolution).toBe('480p');
     expect(low.budget.sessionCapSeconds).toBeLessThan(medium.budget.sessionCapSeconds);
     expect(medium.budget.sessionCapSeconds).toBeLessThan(high.budget.sessionCapSeconds);
@@ -207,7 +201,6 @@ describe('applyQualityPreset', () => {
     expect(applied.quality).toBe('high');
     expect(applied.stream.resolution).toBe('1080p');
     expect(applied.camera.enabled).toBe(true);
-    expect(applied.camera.anglesPerBlot).toBe(4);
     expect(applied.budget.sessionCapSeconds).toBe(600);
   });
 
@@ -235,13 +228,13 @@ describe('mergeSettings', () => {
   it('clamps hostile or out-of-range payloads into legal ranges', () => {
     const merged = mergeSettings(defaultSettings(), {
       stream: { memory: 999 },
-      camera: { anglesPerBlot: -4 },
+      camera: { anglesPerBlot: -4, enabled: false },
       budget: { sessionCapSeconds: 5 },
       moodStrength: 7,
       music: { volume: -1 },
     });
     expect(merged.stream.memory).toBe(50);
-    expect(merged.camera.anglesPerBlot).toBe(0);
+    expect(merged.camera).toEqual({ enabled: false });
     expect(merged.budget.sessionCapSeconds).toBe(10);
     expect(merged.moodStrength).toBe(1);
     expect(merged.music.volume).toBe(0);
@@ -297,23 +290,26 @@ describe('loadSettings / saveSettings', () => {
     expect(loadSettings(storage)).toEqual(defaultSettings());
   });
 
-  it('ships the deepseek vision model by default', () => {
-    expect(defaultSettings().openrouterModel).toBe('deepseek/deepseek-v4.1-flash');
+  it('ships the glm vision model by default', () => {
+    expect(defaultSettings().openrouterModel).toBe('z-ai/glm-5.3-flash');
   });
 
-  it('asks the shipped imagining for a seven second clip that switches in a second', () => {
+  it('asks the shipped imagining for a seven second clip that opens on the photograph', () => {
     const prompt = defaultSettings().visionPrompt;
     expect(prompt).toMatch(/no more than seven seconds long/);
-    expect(prompt).toMatch(/within the first second/);
+    expect(prompt).toMatch(/photograph/);
     expect(prompt).toMatch(/live-action/);
+    // the old flow opened the clip on the painting; the imagining replaced that
+    expect(prompt).not.toMatch(/first second/);
   });
 
   it('moves a stored copy of an old shipped prompt forward, and leaves a typed one alone', () => {
     const storage = memoryStorage();
     const shipped = defaultSettings();
-    // what this app used to ship, verbatim
+    // what this app used to ship, verbatim: the clip opened on the painting and
+    // switched to real footage inside its first second
     shipped.visionPrompt =
-      'You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.';
+      'You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colours and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams - and commit to it. Then write ONE vivid video-generation prompt for a live-action cinematic clip, no more than seven seconds long, that STARTS exactly from this painting as its first frame: within the first second the ink has become real footage of the thing you imagined, and it is never a painting again. Name the subject, the real material it is made of, what it does, the camera move, the light and the mood, and let the film mood and the score named below colour all of it. Output ONLY the video prompt text, under 150 words, no preamble.';
     saveSettings(shipped, storage);
     expect(loadSettings(storage).visionPrompt).toBe(DEFAULT_VISION_PROMPT);
 
@@ -322,23 +318,19 @@ describe('loadSettings / saveSettings', () => {
     expect(loadSettings(storage).visionPrompt).toBe('look deeply at the stain');
   });
 
-  it('clamps a stored orbit length into the range a blot clip may use', () => {
+  it('drops the angle knobs a stored payload still carries, keeping only the switch', () => {
     const storage = memoryStorage();
     const stored = defaultSettings();
-    stored.camera.duration = 15;
-    saveSettings(stored, storage);
-    expect(loadSettings(storage).camera.duration).toBe(MAX_ANGLE_SECONDS);
-
-    stored.camera.duration = 1;
-    saveSettings(stored, storage);
-    expect(loadSettings(storage).camera.duration).toBe(MIN_ANGLE_SECONDS);
+    saveSettings({ ...stored, camera: { enabled: true, duration: 15, anglesPerBlot: 4 } as never }, storage);
+    const loaded = loadSettings(storage);
+    expect(loaded.camera).toEqual({ enabled: true });
   });
 
   it('migrates a stored superseded default model onto the current one', () => {
     const storage = memoryStorage({
-      'ink-paper-studio-v2': JSON.stringify({ openrouterModel: 'z-ai/glm-5.3-flash' }),
+      'ink-paper-studio-v2': JSON.stringify({ openrouterModel: 'deepseek/deepseek-v4.1-flash' }),
     });
-    expect(loadSettings(storage).openrouterModel).toBe('deepseek/deepseek-v4.1-flash');
+    expect(loadSettings(storage).openrouterModel).toBe('z-ai/glm-5.3-flash');
   });
 
   it('keeps a vision model the user deliberately typed in', () => {

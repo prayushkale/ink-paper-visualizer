@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { decodeShare, describeShare, encodeShare, readShareFromHash, shareUrl, type SharedSettings } from './recipe';
 import { BLOT_MARKS, MAX_FOLDS, defaultInkRecipe, inkRecipeFromSeed, renderOps } from '../ink/recipe';
 import { canvasForAspect } from '../ink/types';
-import { MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS } from '../presets/camera';
 
 const fallback = defaultInkRecipe();
 
@@ -27,12 +26,6 @@ function makeShared(overrides: Partial<SharedSettings> = {}): SharedSettings {
     musicMode: 'pinned',
     camera: {
       enabled: true,
-      moves: ['orbit-right', 'push-in'],
-      anglesPerBlot: 3,
-      resolution: '768P',
-      duration: MAX_ANGLE_SECONDS,
-      handoff: 'turn',
-      repeatAngleCycle: true,
     },
     stream: { resolution: '768p', aspectRatio: '16:9', memory: 20, arrivalMode: 'soft' },
     sessionCapSeconds: 180,
@@ -92,7 +85,7 @@ describe('encodeShare / decodeShare', () => {
       moodStrength: 12,
       musicId: 'polka',
       musicMode: 'loud',
-      camera: { anglesPerBlot: 99, duration: 1, resolution: '8K', moves: ['spiral'], handoff: 'teleport' },
+      camera: { anglesPerBlot: 99, duration: 1, resolution: '8K', moves: ['spiral'], handoff: 'teleport', enabled: false },
       stream: { resolution: '4K', aspectRatio: '21:9', memory: 900, arrivalMode: 'smooth' },
       sessionCapSeconds: 5,
     };
@@ -104,12 +97,7 @@ describe('encodeShare / decodeShare', () => {
     expect(decoded.moodId).toBe('dreamlike');
     expect(decoded.musicId).toBe('ambient');
     expect(decoded.musicMode).toBe('pinned');
-    expect(decoded.camera.anglesPerBlot).toBeLessThanOrEqual(4);
-    expect(decoded.camera.duration).toBeGreaterThanOrEqual(MIN_ANGLE_SECONDS);
-    expect(decoded.camera.duration).toBeLessThanOrEqual(MAX_ANGLE_SECONDS);
-    expect(decoded.camera.resolution).toBe('480P');
-    expect(decoded.camera.handoff).toBe('continue');
-    expect(decoded.camera.moves.length).toBeGreaterThan(0);
+    expect(decoded.camera.enabled).toBe(false);
     expect(decoded.stream.memory).toBeLessThanOrEqual(50);
     expect(decoded.stream.arrivalMode).toBe('hard');
     expect(decoded.sessionCapSeconds).toBeGreaterThanOrEqual(10);
@@ -128,13 +116,6 @@ describe('encodeShare / decodeShare', () => {
     const over = makeShared();
     over.recipe = { ...over.recipe, folds: plan(MAX_FOLDS + 2) };
     expect(decodeShare(encodeShare(over), fallback)!.recipe.folds).toHaveLength(MAX_FOLDS);
-  });
-
-  it('drops moves that no longer exist but keeps the valid ones', () => {
-    const payload = makeShared();
-    payload.camera.moves = ['orbit-right', 'gone' as never, 'push-in'];
-    const decoded = decodeShare(encodeShare(payload), fallback)!;
-    expect(decoded.camera.moves).toEqual(['orbit-right', 'push-in']);
   });
 
   it('falls back to the supplied recipe when the payload has none', () => {
@@ -180,6 +161,6 @@ describe('describeShare', () => {
     expect(text).toContain('4321');
     expect(text).toContain('cosmic');
     expect(text).toContain('trance');
-    expect(text).toContain('3 angles');
+    expect(text).toContain('camera on');
   });
 });

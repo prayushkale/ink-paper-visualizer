@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CLIP_SWITCH_SECONDS,
   PRESERVE_CLAUSE,
   clampPrompt,
-  clipOpeningClause,
   composeBlotClipBrief,
   composeBlotClipPrompt,
   composeDirection,
@@ -52,7 +50,7 @@ describe('composeWorldPrompt', () => {
   });
 
   it('offers a repeatable source of new situations', () => {
-    expect(world).toMatch(/new ink blot every few seconds/);
+    expect(world).toMatch(/new photograph every few seconds/);
     expect(world).toMatch(/exact destination/);
   });
 
@@ -60,14 +58,16 @@ describe('composeWorldPrompt', () => {
     expect(world).toMatch(/OPENING: begin mid-motion/);
   });
 
-  it('states that every segment begins inside a real ink painting', () => {
-    expect(world).toMatch(/STARTING FROM THE INK/);
-    expect(world).toMatch(/real ink painting/);
+  it('states that every segment begins inside a photograph of a real place', () => {
+    expect(world).toMatch(/STARTING FROM THE SCENE/);
+    expect(world).toMatch(/photograph of a real place/);
+    // and that the model is never handed a painting to animate
+    expect(world).toMatch(/already photographic; never turn it back into paint/);
   });
 
   it('builds the world out of real materials rather than ink and paper', () => {
     expect(world).toMatch(/MATERIAL: real photography of a real place/);
-    expect(world).toMatch(/never the blot itself on screen/);
+    expect(world).toMatch(/never a painting/);
     expect(world).toContain(PRESERVE_CLAUSE);
   });
 
@@ -173,6 +173,7 @@ describe('composeDirection', () => {
 
   it('pins the closing frame only when the arrival is hard', () => {
     expect(direction).toMatch(/closing frame of this beat is fixed/);
+    expect(direction).toMatch(/land exactly on the incoming photograph/);
     const soft = composeDirection({
       reading: reading(), mood, music, camera: null, moodStrength: 0.8, arrivalMode: 'soft',
     });
@@ -269,10 +270,12 @@ describe('composeBlotClipPrompt', () => {
     expect(lowered(text)).toContain(music.accent.toLowerCase());
   });
 
-  it('states the clip length it was asked for, and the one-second switch', () => {
+  it('states the clip length it was asked for, and that the attached frame is already a photograph', () => {
     expect(clip({ seconds: 7 })).toMatch(/7 seconds long/);
-    expect(clip()).toContain(clipOpeningClause());
-    expect(clip()).toMatch(/first frame is the ink painting/);
+    expect(clip()).toMatch(/attached photograph is the shot's first frame/);
+    expect(clip()).toMatch(/Stay photographic from the very first frame/);
+    // there is no painting in the clip to switch away from
+    expect(clip()).not.toMatch(/ink painting/);
   });
 
   it('describes the blot as a reference for a real scene, never as a painting', () => {
@@ -312,9 +315,12 @@ describe('composeBlotClipBrief', () => {
     expect(brief).toContain(music.brief);
   });
 
-  it('asks for a clip of seven seconds and the one-second switch', () => {
+  it('asks for a clip of seven seconds that opens on the realised photograph', () => {
     expect(brief).toMatch(/at most 7 seconds/);
-    expect(brief).toContain(clipOpeningClause());
+    expect(brief).toMatch(/photograph realised from this study/);
+    // the painting is never a frame of the clip in this flow
+    expect(brief).not.toMatch(/ink painting/);
+    expect(brief).not.toMatch(/first second/);
   });
 
   it('presses the mood harder as the pressure rises', () => {
@@ -322,14 +328,6 @@ describe('composeBlotClipBrief', () => {
     const hard = composeBlotClipBrief({ basePrompt: 'x', mood, music, moodStrength: 0.9, seconds: 7 });
     expect(soft).toMatch(/opening colour/);
     expect(hard).toMatch(/Commit fully/);
-  });
-});
-
-describe('clipOpeningClause', () => {
-  it('is one second unless it is asked for another window', () => {
-    expect(CLIP_SWITCH_SECONDS).toBe(1);
-    expect(clipOpeningClause()).toMatch(/first second/);
-    expect(clipOpeningClause(2)).toMatch(/first 2 seconds/);
   });
 });
 

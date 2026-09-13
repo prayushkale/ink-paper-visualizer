@@ -60,7 +60,7 @@ export async function renderPoster(view: StudioView, settings: Settings): Promis
   const facts = [
     `mood ${mood.label.toLowerCase()}`,
     settings.music.mode === 'pinned' ? `score ${music.label.toLowerCase()} (pinned)` : `score ${music.label.toLowerCase()} (generated)`,
-    `${settings.camera.enabled ? settings.camera.anglesPerBlot : 0} camera angles per blot`,
+    settings.camera.enabled ? 'camera on (1 in 5 blots)' : 'camera off',
     `blot #${settings.ink.seed}`,
     settings.budget.dryRun ? 'dry run' : `${view.session.generatedSeconds}s generated`,
     `${view.chain.sessions} session${view.chain.sessions === 1 ? '' : 's'}`,

@@ -1,14 +1,13 @@
 import { CAMERA_MOVES, type CameraMoveId } from '../presets/camera';
 import type { StudioView, BlotView } from '../studio/studio';
-import { paintReelMarkup, reelIsPlaying } from './paint';
 
 /** What each pipeline state is called on a card, in the rail's own words. */
 export const BLOT_STATE_LABEL: Record<string, string> = {
-  painting: 'painting',
   invented: 'inventing',
   rendered: 'painted',
   uploaded: 'hosted',
   interpreted: 'imagined',
+  imagined: 'realised',
   ready: 'ready',
   scheduled: 'queued',
   live: 'on screen',
@@ -20,13 +19,19 @@ function esc(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** One blot card: the picture, what the model saw in it, and its angle views. */
+/**
+ * One blot card: the picture, what the model saw in it, and its angle views.
+ *
+ * The card shows the ink blot for BLOT_HOLD_MS and then the photograph the
+ * imagining made of it. Both matter - the blot is what was painted and the
+ * photograph is what the film is - so once the photograph is up the ink stays
+ * as a small reference in the corner rather than being thrown away.
+ */
 export function blotCard(blot: BlotView, currentId: string | null): string {
   const isCurrent = blot.id === currentId;
-  // A blot shows its own painting while that is playing, whatever stage the
-  // pipeline has already carried it to: the card is about what the rail has to
-  // show, not about a state that is a second old by the time it is read.
-  const state = blot.painting ? 'painting' : blot.state;
+  // while the hold runs, or before the photograph exists, the blot is the card
+  const showInk = blot.inkHeld || blot.imagined === null;
+  const shown = showInk ? blot.thumb : blot.imagined!;
   const angles = blot.angles
     .map((angle) => `
       <span class="angle ${angle.state}" title="${esc(angle.label)}">
@@ -34,17 +39,17 @@ export function blotCard(blot: BlotView, currentId: string | null): string {
       </span>`)
     .join('');
   return `
-    <article class="blot ${state} ${isCurrent ? 'current' : ''}" data-zoom="${esc(blot.id)}">
+    <article class="blot ${blot.state} ${isCurrent ? 'current' : ''}" data-zoom="${esc(blot.id)}">
       <div class="blot-thumb">
         <button class="blot-zoom" type="button" data-zoom="${esc(blot.id)}" title="Open this blot full screen">
-          ${blot.thumb ? `<img src="${blot.thumb}" alt="ink blot ${blot.seed}" loading="lazy" />` : '<div class="skeleton"></div>'}
+          ${shown ? `<img class="${showInk ? 'ink' : 'scene'}" src="${esc(shown)}" alt="blot ${blot.seed}, ${showInk ? 'the ink it was painted as' : 'as the imagining made it'}" loading="lazy" />` : '<div class="skeleton"></div>'}
         </button>
-        ${blot.paint ? paintReelMarkup(blot.paint) : ''}
+        ${!showInk && blot.thumb ? `<img class="ink-ref" src="${esc(blot.thumb)}" alt="the ink blot this was imagined from" loading="lazy" />` : ''}
         ${isCurrent ? '<span class="now">on screen</span>' : ''}
       </div>
       <div class="blot-body">
         <div class="blot-head">
-          <span class="chip state-${blot.painting ? 'invented' : blot.state}">${esc(BLOT_STATE_LABEL[state] ?? state)}</span>
+          <span class="chip state-${blot.state}">${esc(BLOT_STATE_LABEL[blot.state] ?? blot.state)}</span>
           ${blot.handmade ? '<span class="chip handmade">hand-painted</span>' : ''}
           <span class="seed">#${blot.seed}</span>
         </div>
@@ -56,24 +61,22 @@ export function blotCard(blot: BlotView, currentId: string | null): string {
     </article>`;
 }
 
-/** Which blots are painting, and which frames of theirs are on the rail. */
-function reelsOnShow(view: StudioView): string {
-  return view.rail
-    .filter((blot) => blot.paint !== null && blot.paint.length > 0)
-    .map((blot) => `${blot.id}:${blot.paint!.length}:${blot.paint![0]!.at}`)
-    .join(',');
-}
+/**
+ * What the rail is currently holding, so a repaint can leave it alone.
+ *
+ * A card whose ink hold is still running must not be rewritten: the reveal at
+ * the end of BLOT_HOLD_MS is the one moment the rail has to change by itself.
+ * With nothing holding, the rail always writes - state and readings change
+ * constantly and a stale card is worse than a repaint.
+ */
+const held = new WeakMap<HTMLElement, string>();
 
 export function renderRail(root: HTMLElement, view: StudioView, options: { compact?: boolean } = {}): void {
   const currentId = view.current?.blotId ?? null;
-  // A painting plays as a CSS animation over markup the shell rebuilds on a
-  // heartbeat, so a rewrite would start it again from its first frame. The
-  // studio paints one blot at a time and a card cannot change while its own ink
-  // is arriving, so the rail is left exactly as it is until the show is over -
-  // and until a new blot arrives, which is the one thing that does matter.
   const ids = view.rail.map((blot) => blot.id).join(',');
-  const reels = reelsOnShow(view);
-  if (reelIsPlaying(root, reels === '' ? '' : `${ids}|${reels}`)) return;
+  const holding = view.rail.filter((blot) => blot.inkHeld).map((blot) => blot.id).join(',');
+  if (holding !== '' && held.get(root) === `${ids}|${holding}`) return;
+  held.set(root, holding === '' ? '' : `${ids}|${holding}`);
   const cards = view.rail.map((blot) => blotCard(blot, currentId)).join('');
   const empty = view.rail.length === 0
     ? '<p class="muted pad">The rail fills as soon as a run starts. Press <strong>Start the film</strong>.</p>'

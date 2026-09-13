@@ -32,10 +32,9 @@ export interface Destination {
   blotId: string;
   /** null for a mood-only continuation with no arrival image. */
   url: string | null;
+  /** The move the blot's shot is asked for, from the take prepared for it. */
   cameraMoveId: CameraMoveId | null;
   label: string;
-  /** Index within the blot's destination sequence. */
-  index: number;
 }
 
 export interface SchedulerEvents {
@@ -59,8 +58,6 @@ export interface SchedulerOptions {
   dispatchTimeoutMs?: number;
   /** Consecutive ticks with nothing to dispatch before a mood continuation. */
   stallTicksBeforeContinuation?: number;
-  /** Extra passes over a blot's angle set before it is retired. */
-  maxAngleCycles?: number;
 }
 
 interface InFlight {
@@ -74,19 +71,36 @@ interface InFlight {
 export const CONTINUATION = 'continuation';
 
 /**
+ * How many times an unconfirmed destination is sent again before the film gives
+ * up on it.
+ *
+ * A direction nobody confirms - because the chunk that would have carried its
+ * version never arrived, or the acknowledgement was lost - used to be dropped,
+ * and the blot it was heading into was retired unvisited: the film simply kept
+ * moving and the picture never arrived anywhere. One re-send costs a bounded
+ * wait and saves the film's arrival.
+ */
+export const MAX_REDISPATCH = 1;
+
+/**
  * Turns the blot rail into the film's next moment.
  *
- * One destination lands per dispatched chunk, so a blot with two camera angles
- * occupies three chunks: the blot itself, then two views of it. Because a
- * direction applies to the next *undispatched* chunk, the scheduler opens its
- * gate only when a chunk arrives carrying the version it last sent - otherwise
- * a burst of directions would collapse into the last one and blots would
- * silently vanish.
+ * One blot is one chunk: the film arrives at the photograph the imagining made
+ * of it, holds that for the chunk and moves on to the next blot. The blot's
+ * camera take does not extend its screen time - it is taken around the scene to
+ * give this one shot its camera move - because a blot held for three chunks is
+ * half a minute of film spent on one idea.
+ *
+ * One destination lands per dispatched chunk. Because a direction applies to the
+ * next *undispatched* chunk, the scheduler opens its gate only when a chunk
+ * arrives carrying the version it last sent - otherwise a burst of directions
+ * would collapse into the last one and blots would silently vanish.
  */
 export class BlotScheduler {
   private cursor = 0;
-  private cycles = 0;
   private inFlight: InFlight | null = null;
+  /** A destination whose direction was never confirmed, waiting to go again. */
+  private redispatch: { destination: Destination; attempts: number } | null = null;
   private awaitingDispatch = false;
   private lastSentAt = 0;
   private emptyTicks = 0;
@@ -98,13 +112,11 @@ export class BlotScheduler {
   private readonly now: () => number;
   private readonly dispatchTimeoutMs: number;
   private readonly stallTicksBeforeContinuation: number;
-  private readonly maxAngleCycles: number;
 
   constructor(private readonly options: SchedulerOptions) {
     this.now = options.now ?? (() => Date.now());
     this.dispatchTimeoutMs = options.dispatchTimeoutMs ?? 35_000;
     this.stallTicksBeforeContinuation = options.stallTicksBeforeContinuation ?? 3;
-    this.maxAngleCycles = options.maxAngleCycles ?? 2;
   }
 
   get currentBlotId(): string | null {
@@ -123,28 +135,21 @@ export class BlotScheduler {
     return this.pendingMoodShift !== null;
   }
 
-  /** The destination sequence for a blot: itself, then each angle view. */
+  /**
+   * The destination for a blot: the photograph the imagining made of it.
+   *
+   * The blot itself is never the destination: the film arrives at the photograph
+   * the imagining made of it, because a blot handed to the video model is a
+   * painting the model then animates. The camera move is the one rolled for this
+   * blot, so the shot, the reading and the take shot for it all agree.
+   */
   destinationsFor(blot: BlotJob): Destination[] {
-    const destinations: Destination[] = [];
-    const hasArrival = blot.url !== undefined;
-    destinations.push({
+    return [{
       blotId: blot.id,
-      url: hasArrival ? blot.url! : null,
-      cameraMoveId: null,
+      url: blot.imaginedUrl ?? blot.url ?? null,
+      cameraMoveId: blot.cameraMove ?? null,
       label: blot.reading?.subject ?? 'the blot',
-      index: 0,
-    });
-    for (const take of blot.angles) {
-      if (take.state !== 'ready' || !take.arrivalFrameUrl) continue;
-      destinations.push({
-        blotId: blot.id,
-        url: take.arrivalFrameUrl,
-        cameraMoveId: take.move,
-        label: `${blot.reading?.subject ?? 'the blot'} from ${CAMERA_MOVES[take.move]?.label ?? take.move}`,
-        index: destinations.length,
-      });
-    }
-    return destinations;
+    }];
   }
 
   /** Queues a mood change into the next direction. Never opens a new session. */
@@ -187,15 +192,30 @@ export class BlotScheduler {
    * session that fails to generate one still has a film to run, so this is
    * called on the studio's heartbeat as well as on every late chunk. Returns
    * true when the gate was actually reopened.
+   *
+   * The destination is re-sent rather than abandoned: the film's arrival at its
+   * blot is the beat, and moving straight on to the next blot would leave the
+   * picture with nowhere it was asked to go.
    */
   checkDispatchTimeout(): boolean {
     if (!this.awaitingDispatch || !this.inFlight) return false;
+    const { destination, retries, promptVersion } = this.inFlight;
     if (this.now() - this.inFlight.sentAt <= this.dispatchTimeoutMs) return false;
-    this.options.events?.onWarning?.(
-      `no chunk confirmed prompt version ${this.inFlight.promptVersion} within ${this.dispatchTimeoutMs}ms; reopening the dispatch gate`,
-    );
     this.inFlight = null;
     this.awaitingDispatch = false;
+    // a continuation has no blot to arrive at, and a blot the rail has already
+    // let go of cannot be sent again
+    const sendable = destination.blotId !== CONTINUATION && retries < MAX_REDISPATCH;
+    if (sendable && this.options.rail.find(destination.blotId)) {
+      this.redispatch = { destination, attempts: retries + 1 };
+      this.options.events?.onWarning?.(
+        `no chunk confirmed prompt version ${promptVersion} within ${this.dispatchTimeoutMs}ms; sending the direction for ${destination.label} again`,
+      );
+      return true;
+    }
+    this.options.events?.onWarning?.(
+      `no chunk confirmed prompt version ${promptVersion} within ${this.dispatchTimeoutMs}ms; reopening the dispatch gate`,
+    );
     return true;
   }
 
@@ -235,6 +255,17 @@ export class BlotScheduler {
     const session = this.options.session;
     if (session.status !== 'live') return;
     if (this.awaitingDispatch || this.inFlight) return;
+    // a direction that went unconfirmed goes again before anything new does:
+    // the blot it is heading into is still the film's next arrival
+    if (this.redispatch) {
+      const pending = this.redispatch;
+      this.redispatch = null;
+      const blot = this.options.rail.find(pending.destination.blotId);
+      if (blot && blot.state !== 'passed' && blot.state !== 'failed') {
+        this.send(pending.destination, blot, { advance: false, retries: pending.attempts });
+        return;
+      }
+    }
     this.advance();
     const blot = this.currentBlot();
     if (!blot) {
@@ -250,29 +281,23 @@ export class BlotScheduler {
     this.send(destination, blot);
   }
 
-  /** Moves past a blot whose whole sequence has been aired. */
+  /** Moves past a blot whose chunk has been aired. */
   private advance(): void {
     const blot = this.currentBlot();
     if (!blot) return;
-    const destinations = this.destinationsFor(blot);
-    if (this.cursor < destinations.length) return;
-    const angleViews = destinations.length - 1;
-    if (this.options.readEpisode().camera.repeatAngleCycle && angleViews > 0 && this.cycles < this.maxAngleCycles) {
-      this.cycles += 1;
-      this.cursor = 1; // re-enter the orbit rather than repeating the blot itself
-      return;
-    }
+    if (this.cursor < this.destinationsFor(blot).length) return;
     this.retire(blot.id);
   }
 
   private retire(blotId: string): void {
+    // a blot that is gone cannot be the place the film is still heading
+    if (this.redispatch?.destination.blotId === blotId) this.redispatch = null;
     if (blotId === CONTINUATION || this.retired.has(blotId)) return;
     this.retired.add(blotId);
     this.options.rail.markPassed(blotId);
     this.options.events?.onBlotRetired?.({ blotId });
     this.held = null;
     this.cursor = 0;
-    this.cycles = 0;
   }
 
   private held: BlotJob | null = null;
@@ -284,10 +309,7 @@ export class BlotScheduler {
       this.held = null;
       return null;
     }
-    if (this.held?.id !== next.id) {
-      this.cursor = 0;
-      this.cycles = 0;
-    }
+    if (this.held?.id !== next.id) this.cursor = 0;
     this.held = next;
     return next;
   }
@@ -310,14 +332,14 @@ export class BlotScheduler {
     this.lastSentAt = this.now();
     this.awaitingDispatch = true;
     this.inFlight = {
-      destination: { blotId: CONTINUATION, url: null, cameraMoveId: null, label: 'continuation', index: 0 },
+      destination: { blotId: CONTINUATION, url: null, cameraMoveId: null, label: 'continuation' },
       promptVersion: version,
       sentAt: this.lastSentAt,
       retries: 0,
     };
   }
 
-  private send(destination: Destination, blot: BlotJob): void {
+  private send(destination: Destination, blot: BlotJob, options: { advance?: boolean; retries?: number } = {}): void {
     const episode = this.options.readEpisode();
     const camera = destination.cameraMoveId ? CAMERA_MOVES[destination.cameraMoveId] ?? null : null;
     const shift = this.pendingMoodShift;
@@ -342,8 +364,10 @@ export class BlotScheduler {
     this.pendingMoodShift = null;
     this.lastSentAt = this.now();
     this.awaitingDispatch = true;
-    this.inFlight = { destination, promptVersion: version, sentAt: this.lastSentAt, retries: 0 };
-    this.cursor += 1;
+    this.inFlight = { destination, promptVersion: version, sentAt: this.lastSentAt, retries: options.retries ?? 0 };
+    // a re-sent direction is heading for a blot the cursor has already moved
+    // past, and counting it again would retire the blot a second time
+    if (options.advance !== false) this.cursor += 1;
     // Only a blot that has not yet gone to air is 'scheduled'; once its first
     // view has landed it stays 'live' while its remaining views are sent.
     if (this.options.rail.find(blot.id)?.state === 'ready') {
@@ -360,12 +384,12 @@ export class BlotScheduler {
    * Adopts the blot that already opened the session.
    *
    * Its own image is the session's first frame, so the film starts *inside*
-   * that blot and the first thing to arrive is a view of it from elsewhere.
+   * that blot and the first thing to arrive is the next blot's photograph: the
+   * opening blot has already had its chunk before the session opened.
    */
   beginWith(blot: BlotJob): void {
     this.held = blot;
     this.cursor = 1;
-    this.cycles = 0;
     this.retired.delete(blot.id);
     this.options.rail.markLive(blot.id);
   }
@@ -375,15 +399,14 @@ export class BlotScheduler {
     const blot = this.held;
     if (!blot) return;
     this.cursor = this.destinationsFor(blot).length;
-    this.cycles = this.maxAngleCycles;
     this.retire(blot.id);
     this.tick();
   }
 
   reset(): void {
     this.cursor = 0;
-    this.cycles = 0;
     this.inFlight = null;
+    this.redispatch = null;
     this.awaitingDispatch = false;
     this.emptyTicks = 0;
     this.pendingMoodShift = null;

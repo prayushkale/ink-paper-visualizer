@@ -50,7 +50,7 @@ describe('buildMultiAngleInput', () => {
 
   it('clamps the duration between the model floor and our own ceiling', () => {
     // the endpoint would take fifteen seconds, but one blot's clip is capped at
-    // seven: the painting is over inside its first second and the rest is move
+    // seven: the frame it is handed is already a photograph and the rest is move
     expect(buildMultiAngleInput(request({ duration: 2 })).duration).toBe(MIN_ANGLE_SECONDS);
     expect(buildMultiAngleInput(request({ duration: 99 })).duration).toBe(MAX_ANGLE_SECONDS);
     expect(buildMultiAngleInput(request({ duration: 7.6 })).duration).toBe(MAX_ANGLE_SECONDS);

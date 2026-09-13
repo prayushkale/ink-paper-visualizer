@@ -74,6 +74,19 @@
   --prep-2: #08070a;
   --prep-ink: #f4efe6;
 
+  /* The HUD sits over the film, so it carries its own palette rather than the
+     panels': the chips and the now-imagining card have to answer the theme
+     anyway, and a fixed dark wash was the one part of the page that did not. */
+  --hud-bg: #000000a8;
+  --hud-bg-strong: #000000b8;
+  --hud-line: #ffffff1c;
+  --hud-ink: #e8e5e0;
+  --hud-label: #ffffff8a;
+  --hud-cam: #d8a24a;
+  --hud-warn-bg: #3a2a12c8;
+  --hud-warn-line: #6a5320;
+  --hud-warn-ink: #f0dbb0;
+
   --radius: 12px;
   --radius-sm: 8px;
 }
@@ -146,6 +159,18 @@
   --prep-1: #ffffff;
   --prep-2: #efe9dd;
   --prep-ink: #22202a;
+
+  /* the HUD's light register: warm paper rather than a cold white, so the chips
+     read as the same app as the panels they sit beside */
+  --hud-bg: #fffdf8d9;
+  --hud-bg-strong: #fffdf8ef;
+  --hud-line: #1d1b2129;
+  --hud-ink: #2a2730;
+  --hud-label: #1d1b218c;
+  --hud-cam: #8a5a10;
+  --hud-warn-bg: #fdf1d8e6;
+  --hud-warn-line: #dcc189;
+  --hud-warn-ink: #6a4a0a;
 }
 
 * { box-sizing: border-box; }
@@ -301,41 +326,25 @@ main {
 #filmstrip { display: none; }
 
 /*
- * The painting, at stage size.
+ * The stage still.
  *
- * The rail is a 300px column that a narrow window hides, and the pre-flight is a
- * minute or two with no picture to show for it - so the blot being inked and
- * folded is shown over the stage, from the same frames the rail plays. It sits
- * under the pre-flight card (z-index 3) and over the film's own ground.
+ * While the film has no picture yet this holds the newest realised photograph,
+ * so a minute of pipeline is not a blank screen. It never holds the ink blot -
+ * the blot has its rail card and the full-screen viewer - and once the film is
+ * live the stream is the picture, so the stage holds nothing. It sits under the
+ * pre-flight card (z-index 3) and over the film's own ground.
  */
-#painting {
+#arrival {
   position: absolute; inset: 0; z-index: 2; overflow: hidden;
-  background: var(--stage-bg);
+  background: var(--stage-bg); display: grid; place-items: center;
+  pointer-events: none;
 }
-#painting[hidden] { display: none; }
-#painting .paint-reel { position: absolute; inset: 0; pointer-events: none; }
-#painting .paint-frame,
-#painting .paint-note {
-  position: absolute; opacity: 0;
-  animation-name: paint-beat; animation-timing-function: linear;
-  animation-duration: var(--hold, 260ms); animation-delay: var(--at, 0ms);
-}
-#painting .paint-frame { inset: 0; width: 100%; height: 100%; object-fit: contain; }
-/* the caption sits at the top: the pre-flight card owns the bottom of the stage */
-#painting .paint-note {
-  top: 16px; left: 50%; transform: translateX(-50%);
-  width: max-content; max-width: 90%; text-align: center;
-  padding: 6px 14px; border-radius: 999px;
-  font-size: 13px; font-weight: 600; background: #12111ae6; color: var(--paper);
-}
-/* with motion reduced there is no show to watch, so the stage keeps its card */
-@media (prefers-reduced-motion: reduce) {
-  #painting { display: none; }
-}
+#arrival[hidden] { display: none; }
+#arrival img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 /* studio hides the paper; manual hides the film */
 #app[data-mode="manual"] #film { display: none; }
-#app[data-mode="manual"] #painting { display: none; }
+#app[data-mode="manual"] #arrival { display: none; }
 #app[data-mode="studio"] #paper { display: none; }
 /* The paper has to own its box before the renderer measures it: three.js sizes
    the canvas from the container, and a container sized by the canvas it holds
@@ -387,32 +396,16 @@ main {
 .blot-thumb .blot-zoom:hover:not(:disabled) { background: var(--paper); border: 0; }
 .blot-thumb .now { pointer-events: none; }
 
-/* The blot being painted takes the rail's whole width: at 78px a painting is a
-   thumbnail, and this is the one moment the rail has something to show. */
-.blot.painting { grid-template-columns: 1fr; border-color: var(--accent-soft); }
-.blot.painting .blot-thumb img { aspect-ratio: auto; }
+/* The ink blot is on the card for BLOT_HOLD_MS and then the photograph the
+   imagining made of it takes its place; the blot stays as a corner reference so
+   the card always shows both what was painted and what it became. */
+.blot-thumb .ink-ref {
+  position: absolute; top: 4px; left: 4px; width: 30px; height: 30px;
+  object-fit: cover; border-radius: 5px; border: 1px solid var(--line);
+  box-shadow: 0 2px 8px #00000059; background: var(--paper);
+}
+.ink-ref { pointer-events: none; }
 
-/* The painting, replayed. Every frame carries when it appears and how long it
-   holds, and the finished picture sits underneath, so the last frame handing
-   over to it is invisible. No script drives this: it is all one CSS animation,
-   which is what makes it survive the shell's repaints. */
-.blot-thumb .paint-reel { position: absolute; inset: 0; pointer-events: none; }
-.blot-thumb .paint-frame,
-.blot-thumb .paint-note {
-  position: absolute; opacity: 0;
-  animation-name: paint-beat; animation-timing-function: linear;
-  animation-duration: var(--hold, 260ms); animation-delay: var(--at, 0ms);
-}
-.blot-thumb .paint-frame {
-  inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);
-}
-.blot-thumb .paint-note {
-  left: 4px; right: 4px; bottom: 4px; text-align: center; padding: 2px 4px; border-radius: 4px;
-  font-size: 10px; font-weight: 650; background: #12111aec; color: var(--paper);
-}
-@keyframes paint-beat { from { opacity: 1 } to { opacity: 1 } }
-/* the finished blot is already there underneath, so this costs nothing */
-@media (prefers-reduced-motion: reduce) { .blot-thumb .paint-reel { display: none; } }
 .blot-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .blot-body { min-width: 0; }
 .subject { margin: 6px 0 2px; font-weight: 600; font-size: 13px; }
@@ -436,13 +429,19 @@ main {
 /* -------------------------------------------------------------------- hud */
 
 /*
- * The HUD sits over the film, which is black in both themes, so it keeps its own
- * fixed colours instead of following the palette.
+ * The HUD sits over the film and carries its own palette (`--hud-*`), because it
+ * is the one surface that is not a panel: it has to stay legible over black
+ * footage in the dark theme and over a bright page in the light one, and a
+ * fixed dark wash was the one part of the page that ignored the theme entirely.
  */
 #hud {
   position: absolute; inset: auto 12px 12px 12px;
   display: flex; flex-direction: column; gap: 8px;
   pointer-events: none; font-size: 12px;
+  /* Above the still the stage holds across a session seam: the readouts are the
+     only thing that says a handover is under way, and covering them with a held
+     frame is what makes a chained film look frozen rather than busy. */
+  z-index: 3;
 }
 /* `display: flex` above would otherwise defeat the `hidden` attribute the shell
    uses to take the overlay off the film */
@@ -456,26 +455,28 @@ main {
  * A finished run's stream dies with the session, so the picture on the stage is
  * a file and the only controls over it are the ones written here: without a
  * pause and a scrubber a take can be watched from its start and no further. It
- * keeps the HUD's fixed dark chips (it sits on the picture) and sits above it,
- * which is safe because the HUD is hidden whenever a replay is on screen.
+ * wears the HUD's own palette, because it sits on the picture too, and sits
+ * above the HUD, which is safe because the HUD is hidden whenever a replay is
+ * on screen.
  */
 #playback {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 4; display: flex; align-items: center; gap: 10px;
   width: min(600px, calc(100% - 28px));
-  padding: 7px 12px; border: 1px solid #ffffff2b; border-radius: 999px;
-  background: #12111ae6; box-shadow: 0 10px 26px #00000059;
+  padding: 7px 12px; border: 1px solid var(--hud-line); border-radius: 999px;
+  background: var(--hud-bg-strong); color: var(--hud-ink);
+  box-shadow: 0 10px 26px #00000059;
   font-size: 12px;
 }
 #playback[hidden] { display: none; }
 #playback .playback-toggle,
-#playback .playback-stop { flex: 0 0 auto; color: var(--paper); }
+#playback .playback-stop { flex: 0 0 auto; color: var(--hud-ink); }
 #playback .playback-scrub {
   flex: 1 1 auto; min-width: 0; height: 4px; margin: 0;
   accent-color: var(--accent); cursor: pointer;
 }
 #playback .playback-clock {
-  flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--paper);
+  flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--hud-ink);
 }
 
 /* ------------------------------------------------------- pre-flight overlay */
@@ -509,19 +510,19 @@ main {
 
 .hud-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .hud-cell {
-  background: #000000a8; border: 1px solid #ffffff1c; border-radius: 999px;
-  padding: 4px 9px; font: 11px/1.3 ui-monospace, monospace; color: #e8e5e0;
+  background: var(--hud-bg); border: 1px solid var(--hud-line); border-radius: 999px;
+  padding: 4px 9px; font: 11px/1.3 ui-monospace, monospace; color: var(--hud-ink);
 }
-.hud-cell.buffer.thin { color: #e0a94a; border-color: #6a5320; }
-.hud-cell.buffer.deep { color: #5fbf8a; border-color: #2f5a45; }
+.hud-cell.buffer.thin { color: var(--warn); border-color: var(--warn-line); }
+.hud-cell.buffer.deep { color: var(--ok); border-color: var(--ok-line); }
 .hud-current {
-  background: #000000b8; border: 1px solid #ffffff1c; border-radius: var(--radius-sm);
+  background: var(--hud-bg-strong); border: 1px solid var(--hud-line); border-radius: var(--radius-sm);
   padding: 8px 11px; display: flex; flex-direction: column; gap: 2px;
 }
-.hud-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #ffffff8a; }
+.hud-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--hud-label); }
 .hud-current strong { font-size: 15px; }
-.hud-cam { font-size: 11px; color: #d8a24a; }
-.hud-warn { background: #3a2a12c8; border: 1px solid #6a5320; border-radius: var(--radius-sm); padding: 6px 10px; color: #f0dbb0; }
+.hud-cam { font-size: 11px; color: var(--hud-cam); }
+.hud-warn { background: var(--hud-warn-bg); border: 1px solid var(--hud-warn-line); border-radius: var(--radius-sm); padding: 6px 10px; color: var(--hud-warn-ink); }
 
 /* --------------------------------------------------------------- controls */
 
@@ -681,9 +682,17 @@ select:disabled, input:disabled { opacity: 0.55; }
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: 0 24px 60px #000000a8;
 }
-.viewer-picture { display: grid; place-items: center; background: var(--stage-bg); }
+/* The blot and the photograph made of it, side by side: the run's whole idea is
+   the two of them, and either alone is half the story. */
+.viewer-pictures { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.viewer-picture { position: relative; display: grid; place-items: center; background: var(--stage-bg); }
 .viewer-image { display: block; max-width: 100%; max-height: 62dvh; object-fit: contain; }
 .viewer-frame { width: 100%; aspect-ratio: var(--paper-aspect, 1); background: var(--paper); }
+.viewer-tag {
+  position: absolute; left: 8px; bottom: 8px; padding: 3px 8px; border-radius: 999px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  background: var(--hud-bg-strong); color: var(--hud-ink); border: 1px solid var(--hud-line);
+}
 .viewer-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; text-align: left; }
 .viewer-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .viewer-close { margin-left: auto; }

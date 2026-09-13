@@ -20,8 +20,11 @@ export interface ManualContext {
   save(): void;
   /** The brush is UI state, not a run setting, so it persists on its own. */
   onBrushChanged(drop: DropOptions): void;
-  /** Hands the finished blot to the film. */
-  onHandoff(blob: Blob, thumbDataUri: string, recipe: InkRecipe): void;
+  /**
+   * Hands the finished blot to the film: the blob the run hosts, the rail's
+   * thumbnail, the small JPEG the vision model reads, and the recipe.
+   */
+  onHandoff(blob: Blob, thumbDataUri: string, visionDataUri: string, recipe: InkRecipe): void;
   onExit(): void;
 }
 
@@ -199,8 +202,8 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
         <p class="hint">
           The imagining runs under <strong>${esc(mood.label)}</strong> at
           ${ctx.settings.moodStrength.toFixed(2)} pressure and a <strong>${esc(music.label)}</strong> score at
-          ${music.bpm} BPM. The clip it writes is at most ${MAX_ANGLE_SECONDS}s long, and the painting is over
-          inside its first second.
+          ${music.bpm} BPM. The clip it writes is at most ${MAX_ANGLE_SECONDS}s long, opens on the photograph
+          the imagining makes of this blot, and is cut to the score's pulse.
         </p>
         <button class="primary" id="btnInterpret">Imagine this blot</button>
         <button class="secondary" id="btnMoreInk">Back to painting</button>
@@ -295,7 +298,7 @@ export function mountManual(ctx: ManualContext): { rerender(): void; phase(): Ph
     state.interpretation = undefined;
     state.error = undefined;
     state.phase = 'paint';
-    void snapshot.blob.then((blob) => ctx.onHandoff(blob, snapshot.thumbDataUri, recipe));
+    void snapshot.blob.then((blob) => ctx.onHandoff(blob, snapshot.thumbDataUri, snapshot.visionDataUri, recipe));
   }
 
   render();

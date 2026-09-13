@@ -19,23 +19,6 @@ export function paletteSentence(colors: readonly string[]): string {
  */
 export const PRESERVE_CLAUSE = 'Preserve the live-action photographic look of every frame and everything already established.';
 
-/**
- * How much of a blot's clip may still be the painting.
- *
- * A clip opens on the blot itself, because the blot is the image the model is
- * handed, and left to itself the model animates that painting for the whole take
- * - which is what made the film arrive on an inky frame. The switch to real
- * footage is stated as one second wherever a clip is asked for, so the studio's
- * orbit takes and the hand-painted imagining agree about the first second.
- */
-export const CLIP_SWITCH_SECONDS = 1;
-
-/** The one wording of "the painting is over inside a second", shared by both. */
-export function clipOpeningClause(seconds: number = CLIP_SWITCH_SECONDS): string {
-  const window = seconds === 1 ? 'first second' : `first ${seconds} seconds`;
-  return `The clip opens on the painting and the switch is over inside its ${window}: the first frame is the ink painting, and by the end of it the picture is live-action footage of the real scene - at no point after that is it a painting again.`;
-}
-
 /** How hard the mood is pressed, in one place so every prompt presses equally. */
 export function moodPressureClause(moodStrength: number): string {
   return moodStrength >= 0.75
@@ -81,17 +64,19 @@ export function composeWorldPrompt(input: WorldPromptInput): string {
     `WORLD: ${mood.lead}`,
     `${pressure}`,
     '',
-    `MATERIAL: real photography of a real place, in real materials - skin, water, dust, stone, metal, fabric, weather - shot on 35mm with practical light, natural motion blur and true optics. The ink blot handed to you as the opening image is a reference for the forms, the composition and the colours of this world, never its look: no paper, no pigment, no brush marks, no wash, no drawing, no illustration, and never the blot itself on screen. ${paletteSentence(palette)}`,
+    `MATERIAL: real photography of a real place, in real materials - skin, water, dust, stone, metal, fabric, weather - shot on 35mm with practical light, natural motion blur and true optics. Every image handed to you is a photograph of this world and never a painting: no paper, no ink, no pigment, no brush marks, no wash, no drawing, no illustration. ${paletteSentence(palette)}`,
     '',
     `PRESERVE: ${PRESERVE_CLAUSE} Preserve the lens, the light and the camera language you opened with, the colours the ink is running to as the film's grade, the film's unhurried curiosity, and its refusal to explain itself. Preserve whatever figures or places have already appeared.`,
     '',
-    'HOW THE FILM MOVES: the film is handed a new ink blot every few seconds, and each blot is an exact destination the picture must arrive at. Never announce a blot. Treat each incoming blot as something the world was already becoming.',
+    'HOW THE FILM MOVES: the film is handed a new photograph every few seconds, and each one is an exact destination the picture must arrive at. Never announce one, and never hold one as a still. Treat each incoming photograph as the place the world was already becoming.',
     '',
-    'STARTING FROM THE INK: every segment begins inside a real ink painting, and that painting is a reference photograph of the scene the film is already in. Read its actual forms - the silhouette, the mass, where the light falls, the colours - and rebuild them as real objects, a real location and real weather. The painting is the subject; its medium is never the picture.',
+    'STARTING FROM THE SCENE: every segment begins inside a photograph of a real place, and that photograph is a view of the scene the film is already in. Read its actual forms - the silhouette, the mass, where the light falls, the colours - and arrive at it as real objects, real weather and real material under the same light. It is already photographic; never turn it back into paint.',
     '',
     `OPENING: begin mid-motion, already underway — ${input.openingAction ?? 'a slow push through real air and light, as if the camera has been watching this place for a while'}.`,
     '',
     `SOUND: ${sound}`,
+    '',
+    'SYNC: the film moves with its score. Cut the picture to that pulse, land every arrival and every turn on an accent, and let the score be the track this film was made for - picture and music in step from the first second to the last.',
   ].join('\n');
 }
 
@@ -126,7 +111,8 @@ export function composeVisionPrompt(input: VisionPromptInput): string {
     `- Mood pressure: ${input.moodStrength.toFixed(2)} of 1, where 1 means commit fully to the mood.`,
     `- Score: ${music.label} at about ${music.bpm} BPM — ${music.brief}.`,
     `- ${cameraLine}`,
-    '- The painting is a reference photograph of a real scene, never its look. Name the real thing it depicts and describe it as live-action footage: concrete nouns, real materials, real motion, a named light source, a lens, and how the camera moves. Never write about ink, paper, pigment, brushwork, painting or animation.',
+    '- The painting is a study of a real scene, never a frame of the film. Name the real thing it depicts and describe it as live-action photography: concrete nouns, real materials, real motion, a named light source, a lens, and how the camera moves. This beat becomes a photograph realised from the study, so it must read as photography from the first frame. Never write about ink, paper, pigment, brushwork, painting or animation.',
+    '- Move with the score: pace the beat to that pulse and land its key motion or turn on an accent, so the film stays in step with the track from one beat to the next.',
     `- Beats so far (oldest first):`,
     history,
     '',
@@ -149,14 +135,18 @@ export interface BlotClipPromptInput {
 }
 
 /**
- * The prompt for one blot's own clip: the Multi Angle take that blot is orbited
- * with, and the take whose held final pose the film arrives on.
+ * The prompt for one blot's own clip: the Multi Angle take the realised blot is
+ * orbited with, and the take whose held final pose the film arrives on.
  *
  * Multi Angle takes a prompt, and without one the model keeps the scene frozen
- * and animates the painting it was handed. This says what the blot is a
- * reference for instead, in the same keys as the rest of the film - the world,
- * the mood that is set, and the score - so a blot's clip stops being the one
- * paid-for picture in the app that ignores the settings beside it.
+ * and ignores the settings beside it. This says what the frame is and where it
+ * belongs, in the same keys as the rest of the film - the world, the mood that is
+ * set, and the score - so a blot's clip stops being the one paid-for picture that
+ * ignores everything the run was configured with.
+ *
+ * The frame it is handed is the photograph the imagining made, never the ink: a
+ * blot handed over here would be animated as a painting, which is the whole
+ * reason the imagining step exists.
  */
 export function composeBlotClipPrompt(input: BlotClipPromptInput): string {
   const { mood, music, reading, camera } = input;
@@ -164,7 +154,7 @@ export function composeBlotClipPrompt(input: BlotClipPromptInput): string {
   const beat = reading?.prompt?.trim() ?? '';
   const lines = [
     `A single unbroken shot of live-action photography, ${input.seconds} seconds long, 24 fps: a real place in real materials - skin, water, dust, stone, metal, fabric, weather - under practical light, with natural motion blur and true optics.`,
-    `OPENING: the attached ink painting is the shot's first frame, and it is a reference photograph of a real scene rather than the picture's medium. ${clipOpeningClause()}`,
+    'OPENING: the attached photograph is the shot\'s first frame, and it is the real scene itself, already photographic. Stay photographic from the very first frame: no ink, no paper, no pigment, no brushwork, no drawing, no illustration and no animation.',
   ];
   if (subject !== '' || beat !== '') {
     lines.push(`SUBJECT: ${subject !== '' ? `${capitalise(subject)}. ` : ''}${beat}`.trim());
@@ -204,7 +194,8 @@ export function composeBlotClipBrief(input: BlotClipBriefInput): string {
     `- Mood pressure: ${input.moodStrength.toFixed(2)} of 1, where 1 means commit fully to the mood. ${moodPressureClause(input.moodStrength)}`,
     `- Score: ${input.music.label} at about ${input.music.bpm} BPM - ${input.music.brief}.`,
     `- Length: one moment of at most ${input.seconds} seconds, with an arc that lands inside it rather than a sequence of events.`,
-    `- Switch: ${clipOpeningClause()}`,
+    '- Frame one: the clip begins on a photograph realised from this study, never on the painting itself, so write the beat as photography from its first frame.',
+    '- Sync: cut the movement to the score above, so the clip lands on its pulse.',
     '- Never write about ink, paper, pigment, brushwork, painting or animation being on screen.',
   ].join('\n');
 }
@@ -244,12 +235,13 @@ export function composeDirection(input: DirectionInput): string {
 
   if (camera) parts.push(`${capitalise(camera.phrase)}.`);
   if (arrivalMode === 'hard') {
-    parts.push('The closing frame of this beat is fixed: land exactly on the real scene the incoming ink painting depicts - the same forms, now real material under the same light - rather than cutting or fading to it. The take then keeps running from inside that scene. Never resolve into the painting itself: no blot, no paper, no pigment, no crease, no illustration.');
+    parts.push('The closing frame of this beat is fixed: land exactly on the incoming photograph - the same forms, the same light, already real material - rather than cutting, fading or dissolving to it. The take then keeps running from inside that place. Never resolve into ink, paper, pigment, a crease or an illustration.');
   } else {
-    parts.push('Let the picture drift toward the real scene the incoming ink painting depicts, keep the take running with no cut, and never let the ink, the paper or the crease show.');
+    parts.push('Let the picture drift toward the place the incoming photograph shows, keep the take running with no cut, and never let ink, paper or a crease show.');
   }
   if (reading.sound) parts.push(`Sound: ${reading.sound.trim()}`);
   else parts.push(`Sound: ${music.accent}.`);
+  parts.push(`Stay in step with the score at ${music.bpm} BPM: land the beat's key motion on its pulse.`);
   return parts.join(' ');
 }
 

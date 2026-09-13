@@ -13,8 +13,8 @@ function blot(overrides: Partial<BlotView> = {}): BlotView {
     handmade: false,
     seed: 42,
     thumb: 'data:image/jpeg;base64,thumb',
-    paint: null,
-    painting: false,
+    imagined: null,
+    inkHeld: false,
     subject: 'a slow tide',
     prompt: 'The tide crosses the paper and gathers into ridges.',
     url: 'https://fal.media/42.png',
@@ -28,6 +28,18 @@ describe('blotViewerMarkup', () => {
     const markup = blotViewerMarkup(blot());
     expect(markup).toContain('https://fal.media/42.png');
     expect(markup).not.toContain('data:image/jpeg;base64,thumb');
+  });
+
+  it('shows the photograph the imagining made of the blot beside the ink', () => {
+    const markup = blotViewerMarkup(blot({ imagined: 'https://fal.media/scene.png' }));
+    expect(markup).toContain('https://fal.media/scene.png');
+    expect(markup).toContain('what the film is made of');
+    // and it keeps saying whose ink it was drawn from
+    expect(markup).toContain('the ink it was painted as');
+  });
+
+  it('says nothing about an imagining that never happened', () => {
+    expect(blotViewerMarkup(blot())).not.toContain('what the film is made of');
   });
 
   it('falls back to the thumbnail for a blot that was never hosted', () => {

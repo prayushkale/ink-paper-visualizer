@@ -1,8 +1,6 @@
 import { defaultInkRecipe } from './ink/recipe';
 import type { InkRecipe } from './ink/types';
 import {
-  MAX_ANGLE_SECONDS,
-  MIN_ANGLE_SECONDS,
   defaultCameraConfig,
   type CameraConfig,
 } from './presets/camera';
@@ -142,17 +140,20 @@ export function multiAngleRate(resolution: AngleResolution, now: Date = new Date
 }
 
 /** Director generates in 10 s chunks; one destination lands per dispatched chunk. */
+/** Director generates in 10 s chunks; one blot is one destination, so one chunk. */
 export const CHUNK_SECONDS = 10;
 
-/** How many blot destinations a run produces, given the angle-per-blot choice. */
-export function planDestinations(
-  seconds: number,
-  anglesPerBlot: number,
-): { beats: number; blots: number; beatsPerBlot: number } {
-  const beatsPerBlot = Math.max(1, Math.round(anglesPerBlot) + 1);
+/**
+ * What a run of this length shows.
+ *
+ * A blot gets one chunk: the film arrives at the photograph the imagining made
+ * of it, holds that for the chunk and moves on. So a run is exactly as many
+ * blots as it has chunks, and a blot's orbit takes are camera work rather than
+ * screen time.
+ */
+export function planDestinations(seconds: number): { beats: number; blots: number } {
   const beats = Math.floor(Math.max(0, seconds) / CHUNK_SECONDS);
-  const blots = beats === 0 ? 0 : Math.max(1, Math.floor(beats / beatsPerBlot));
-  return { beats, beatsPerBlot, blots };
+  return { beats, blots: beats };
 }
 
 export interface RunEstimate {
@@ -165,7 +166,6 @@ export interface RunEstimate {
   totalUsd: number;
   beats: number;
   blots: number;
-  beatsPerBlot: number;
 }
 
 /**
@@ -194,7 +194,7 @@ export function estimateRun(
   }
   const rate = directorRate(now);
   const angleRate = multiAngleRate(input.angleResolution, now);
-  const { beats, blots, beatsPerBlot } = planDestinations(seconds, input.anglesPerBlot);
+  const { beats, blots } = planDestinations(seconds);
   const angleTakes = Math.round(blots * Math.max(0, input.anglesPerBlot));
   const angleSeconds = angleTakes * Math.max(0, input.angleSeconds);
   return {
@@ -207,7 +207,6 @@ export function estimateRun(
     totalUsd: directorSeconds * rate + angleSeconds * angleRate,
     beats,
     blots,
-    beatsPerBlot,
   };
 }
 
@@ -232,23 +231,32 @@ export function clampNumber(value: number, min: number, max: number): number {
  * The prompt behind the hand-painted route's one imagining.
  *
  * The clip it asks for is the same shape as the one the studio makes for itself:
- * at most seven seconds, opening on the painting and over the painting inside
- * the first second, with the mood and the score appended by
+ * at most seven seconds, opening on the photograph the imagining makes of the
+ * blot rather than the blot itself, and cut to the score - both appended by
  * `composeBlotClipBrief` rather than left out of the picture.
+ *
+ * The painting is the study, never a frame: the video model is handed a
+ * photograph, so nothing here may ask for the ink to be on screen. That is what
+ * the old wording did - it opened the clip on the painting and spent its first
+ * second switching to real footage, which is exactly what the imagining step
+ * now makes unnecessary.
  */
-export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colours and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams - and commit to it. Then write ONE vivid video-generation prompt for a live-action cinematic clip, no more than seven seconds long, that STARTS exactly from this painting as its first frame: within the first second the ink has become real footage of the thing you imagined, and it is never a painting again. Name the subject, the real material it is made of, what it does, the camera move, the light and the mood, and let the film mood and the score named below colour all of it. Output ONLY the video prompt text, under 150 words, no preamble.`;
+export const DEFAULT_VISION_PROMPT = `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colours and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams - and commit to it. The blot is a study, not a frame: an image model will realise the thing you name as a photograph of a real scene, and that photograph - never the painting - is the clip's first frame. Write ONE vivid video-generation prompt for a live-action cinematic clip, no more than seven seconds long, that begins inside that photograph and stays photographic throughout: real material, real weather, real motion, a named light source and a lens. Cut the movement to the score named below - one beat of action whose key motion lands on the track's pulse - so the clip and the film it joins move in sync with the music. Name the subject, the real material it is made of, what it does, the camera move and the light, and let the film mood and the score colour all of it. Output ONLY the video prompt text, under 150 words, no preamble.`;
 
 /** Asks the vision model for machine-readable direction, not prose. */
 export const DEFAULT_STUDIO_PROMPT = `You are the director of a photoreal, live-action film: one continuous, unbroken take that the viewer watches live. You are shown one real ink-and-fold painting at a time, and you are the only one who decides which real place it is a reference for.
 
-Look hard at the blot. It is a reference photograph of a real thing - a figure, a place, a creature, a machine, a storm, a landscape - so find that real thing and commit to it. Then describe it VIVIDLY enough that a camera crew could shoot it without ever seeing the painting: name the subject, the real material it is made of, what it is doing, where the light comes from, the lens, and how the camera moves. Concrete nouns and real motion beat atmosphere every time.
+Look hard at the blot. It is a study of a real thing - a figure, a place, a creature, a machine, a storm, a landscape - so find that real thing and commit to it. Then describe it VIVIDLY enough that a camera crew could shoot it without ever seeing the painting: name the subject, the real material it is made of, what it is doing, where the light comes from, the lens, and how the camera moves. Concrete nouns and real motion beat atmosphere every time.
 
 Rules:
 - One beat is a MOMENT, not a summary. Say what is happening now and what it becomes.
+- The blot is a study, never a frame. Every picture the film is handed is a photograph realised from it, so the beat has to survive being photographed: real things, real material, real light.
 - The beat must be filmable live-action: a subject, an action, a real environment, a camera move, a named light source. Never "ink spreads", "colours bloom", "the blot moves" or anything else about the medium.
 - The film is already running. Keep its world, palette and camera language continuous with the beats before it. Never restart, never cut to a title, never address the viewer.
 - The incoming painting is a reference for the real scene this beat arrives at: describe the forms in it as real things in real material, and never ask for the blot, the paper, the ink, the crease or any illustration to appear on screen.
 - Let the ink only grade the picture; the world itself stays photographic.
+- Move with the score. The score named below is the film's pulse: pace the action and the camera move to it, land the beat's key motion or turn on a musical accent, and keep the beat about one musical phrase long, so picture and music stay in sync from the first chunk to the last.
+- Keep the beat inside that score. Name the one or two sounds it adds rather than inventing new music, so the track below stays the best thing to hear under this film.
 - No real people, no brands, no legible on-screen text, no graphic violence. Strange, beautiful and hyper-real is good; flat illustration, painting or animation is not.
 
 Reply with ONLY a JSON object, no markdown fence:
@@ -276,7 +284,7 @@ export interface QualityPresetSpec {
   label: string;
   blurb: string;
   stream: Pick<StreamConfig, 'resolution' | 'memory'>;
-  camera: Pick<CameraConfig, 'enabled' | 'anglesPerBlot' | 'resolution' | 'duration'>;
+  camera: Pick<CameraConfig, 'enabled'>;
   budget: Pick<BudgetConfig, 'sessionCapSeconds' | 'sessionCapUsd' | 'dailyCapUsd'>;
 }
 
@@ -286,23 +294,23 @@ export const QUALITY_PRESETS: Record<QualityPreset, QualityPresetSpec> = {
     label: 'Low',
     blurb: '480p, no orbit takes, one 60s session. The cheapest run.',
     stream: { resolution: '480p', memory: 6 },
-    camera: { enabled: false, anglesPerBlot: 0, resolution: '480P', duration: 5 },
+    camera: { enabled: false },
     budget: { sessionCapSeconds: 60, sessionCapUsd: 1.5, dailyCapUsd: 5 },
   },
   medium: {
     id: 'medium',
     label: 'Medium',
-    blurb: '768p, two orbit takes per blot, a three-minute session.',
+    blurb: '768p, a camera move on one blot in five, a three-minute session.',
     stream: { resolution: '768p', memory: 12 },
-    camera: { enabled: true, anglesPerBlot: 2, resolution: '480P', duration: 5 },
+    camera: { enabled: true },
     budget: { sessionCapSeconds: 180, sessionCapUsd: 6, dailyCapUsd: 20 },
   },
   high: {
     id: 'high',
     label: 'High',
-    blurb: '1080p, a four-angle orbit set, a ten-minute session.',
+    blurb: '1080p, a camera move on one blot in five, a ten-minute session.',
     stream: { resolution: '1080p', memory: 24 },
-    camera: { enabled: true, anglesPerBlot: 4, resolution: '768P', duration: MAX_ANGLE_SECONDS },
+    camera: { enabled: true },
     budget: { sessionCapSeconds: 600, sessionCapUsd: 30, dailyCapUsd: 120 },
   },
 };
@@ -336,9 +344,6 @@ export function qualityPresetDrifted(settings: Settings): boolean {
     same(settings.stream.resolution, preset.stream.resolution)
     && same(settings.stream.memory, preset.stream.memory)
     && same(settings.camera.enabled, preset.camera.enabled)
-    && same(settings.camera.anglesPerBlot, preset.camera.anglesPerBlot)
-    && same(settings.camera.resolution, preset.camera.resolution)
-    && same(settings.camera.duration, preset.camera.duration)
     && same(settings.budget.sessionCapSeconds, preset.budget.sessionCapSeconds)
     && same(settings.budget.sessionCapUsd, preset.budget.sessionCapUsd)
     && same(settings.budget.dailyCapUsd, preset.budget.dailyCapUsd)
@@ -349,13 +354,13 @@ const LS_KEY = 'ink-paper-studio-v2';
 const LS_KEY_V1 = 'ink-paper-settings-v1';
 
 /** The vision model shipped by default. */
-export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4.1-flash';
+export const DEFAULT_OPENROUTER_MODEL = 'z-ai/glm-5.3-flash';
 
 /**
  * Defaults this app used to ship. A stored value that matches one of these was
  * never a deliberate choice, so it is migrated forward rather than honoured.
  */
-const SUPERSEDED_OPENROUTER_MODELS = ['z-ai/glm-5.3-flash'];
+const SUPERSEDED_OPENROUTER_MODELS = ['deepseek/deepseek-v4.1-flash'];
 
 /**
  * Vision prompts this app used to ship. The wording is not decoration: it is
@@ -364,6 +369,9 @@ const SUPERSEDED_OPENROUTER_MODELS = ['z-ai/glm-5.3-flash'];
  * a superseded model is. Anything the user actually typed is left alone.
  */
 const SUPERSEDED_VISION_PROMPTS = [
+  // the wording that named the painting as the clip's first frame: the imagining
+  // step now hands the video model a photograph, so the switch no longer exists
+  `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colours and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams - and commit to it. Then write ONE vivid video-generation prompt for a live-action cinematic clip, no more than seven seconds long, that STARTS exactly from this painting as its first frame: within the first second the ink has become real footage of the thing you imagined, and it is never a painting again. Name the subject, the real material it is made of, what it does, the camera move, the light and the mood, and let the film mood and the score named below colour all of it. Output ONLY the video prompt text, under 150 words, no preamble.`,
   `You are a visionary film director. Study this abstract ink blot painting. Let its shapes, colors and negative space suggest something only you can see - figures, landscapes, creatures, weather, machines, dreams. Then write ONE vivid video-generation prompt for a short cinematic video that STARTS exactly from this painting as its first frame and then comes alive and evolves into what you imagined. Describe subject, motion, camera movement, lighting and mood. Output ONLY the video prompt text, under 150 words, no preamble.`,
 ];
 
@@ -431,8 +439,9 @@ export function mergeSettings(base: Settings, patch: unknown): Settings {
   if (!isQualityPreset(out.quality)) out.quality = DEFAULT_QUALITY;
   // runtime-only fields must never arrive from a stored or shared payload
   out.music.resolvedUrl = null;
-  out.camera.anglesPerBlot = clampNumber(Math.round(out.camera.anglesPerBlot), 0, 4);
-  out.camera.duration = clampNumber(Math.round(out.camera.duration), MIN_ANGLE_SECONDS, MAX_ANGLE_SECONDS);
+  // the camera is one switch now: anything a stored payload carries from the
+  // days of move chips, orbit counts and handoff policies is dropped here
+  out.camera = { enabled: out.camera?.enabled !== false };
   out.stream.memory = clampNumber(Math.round(out.stream.memory), 1, 50);
   out.budget.sessionCapSeconds = clampNumber(Math.round(out.budget.sessionCapSeconds), 10, 900);
   out.moodStrength = clampNumber(out.moodStrength, 0, 1);

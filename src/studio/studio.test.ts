@@ -10,7 +10,7 @@ import type { DirectorConnection, DirectorTransport, TransportHandlers } from '.
 import type { Timer } from '../stream/session';
 
 /** A transport that records wire messages and lets a test play the server. */
-function fakeTransport() {
+function fakeTransport(onClose?: () => void) {
   const sent: Array<Record<string, unknown>> = [];
   let handlers: TransportHandlers | null = null;
   const transport: DirectorTransport = {
@@ -18,7 +18,9 @@ function fakeTransport() {
       handlers = next;
       const connection: DirectorConnection = {
         send: (message) => void sent.push(message as Record<string, unknown>),
-        close: async () => {},
+        close: async () => {
+          onClose?.();
+        },
       };
       return connection;
     },
@@ -56,6 +58,8 @@ function fakeTimer() {
     beat() {
       for (const fn of [...callbacks.values()]) fn();
     },
+    /** How many timers are still registered: catches a one-shot left running. */
+    pending: () => callbacks.size,
   };
 }
 
@@ -65,6 +69,8 @@ interface HarnessOptions {
   fetchTrack?: (url: string) => Promise<Blob>;
   /** Overrides merged in last, for tests that need one port to hang or fail. */
   ports?: Partial<StudioOptions>;
+  /** Called as a session is torn down, for tests about the seam. */
+  onClose?: () => void;
 }
 
 interface Harness {
@@ -94,7 +100,7 @@ function harness(options: HarnessOptions = {}): Harness {
   if (options.settings?.budget) settings.budget = { ...settings.budget, ...options.settings.budget };
   if (options.settings?.camera) settings.camera = { ...settings.camera, ...options.settings.camera };
 
-  const transport = fakeTransport();
+  const transport = fakeTransport(options.onClose);
   const clock = { value: 1_700_000_000_000 };
   const views: StudioView[] = [];
   const timer = fakeTimer();
@@ -162,9 +168,13 @@ function harness(options: HarnessOptions = {}): Harness {
     remux: async (blob) => new Blob([blob], { type: 'video/mp4' }),
     schedule: timer.timer,
     now: () => clock.value,
-    // advancing the clock keeps the pre-flight wait bounded in tests
+    // Advancing the clock keeps the pre-flight wait bounded in tests, and the
+    // yield keeps a fake-clock pre-flight from running all the way to its
+    // deadline inside a single flush: the rail warms up in the background now,
+    // so a test has to hand the loop a turn to be able to see the overlay.
     sleep: async () => {
       clock.value += 300;
+      await new Promise((resolve) => setTimeout(resolve, 0));
     },
     onView: (view) => views.push(view),
     ...(options.ports ?? {}),
@@ -238,6 +248,55 @@ describe('InkStudio', () => {
     expect(configure.audio_url).toBeUndefined();
   });
 
+  it('shows the realised photograph on the stage while the rail warms up', async () => {
+    // The stage belongs to the film, and the photograph is what the film is made
+    // of. The ink blot has its rail card and the full-screen viewer; laying it
+    // over the stage is showing the reference as if it were the picture.
+    const h = harness({
+      ports: {
+        imagineImage: async ({ imageUrl }) => ({ url: `${imageUrl.replace(/\.png$/, '')}-imagined.png` }),
+      },
+    });
+    await goLive(h);
+    const shown = h.views.map((view) => view.card).filter((card) => card !== null);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.every((card) => /-imagined\.png$/.test(card.image))).toBe(true);
+  });
+
+  it('never lays a still of the blot over the running film', async () => {
+    const h = harness();
+    const configure = await goLive(h);
+    // the session is open and its stream has not painted yet, so the stage holds
+    // the photograph the film opens *inside* - the session's own first frame -
+    // and never the ink blot that photograph was drawn from
+    expect(h.studio.view.card?.image).toBe(configure.image_url);
+    // a blot going to air does not put one back over the film either
+    h.transport.server(chunk({ prompt_version: 2 }));
+    expect(h.studio.view.card?.image).toBe(configure.image_url);
+  });
+
+  it('opens on the photograph the imagining made, never on the ink blot', async () => {
+    // The blot is a reference. Handed to the video model it is the picture, and
+    // the model animates the ink; handed to the image model it becomes the
+    // photograph the film opens inside.
+    const imagined = new Map<string, string>();
+    const h = harness({
+      ports: {
+        imagineImage: async ({ imageUrl }) => {
+          const url = `${imageUrl.replace(/\.png$/, '')}-imagined.png`;
+          imagined.set(imageUrl, url);
+          return { url };
+        },
+      },
+    });
+    const configure = await goLive(h);
+    expect(imagined.size).toBeGreaterThan(0);
+    expect(String(configure.image_url)).toMatch(/-imagined\.png$/);
+    // and every orbit is taken around the photograph rather than the blot
+    expect(h.calls.angleRequests.length).toBeGreaterThan(0);
+    expect(h.calls.angleRequests.every((request) => /-imagined\.png$/.test(request.image_url))).toBe(true);
+  });
+
   it('waits for the whole rail pipeline before opening a paid session', async () => {
     const h = harness();
     await goLive(h);
@@ -301,24 +360,34 @@ describe('InkStudio', () => {
   it('reports what the pre-flight is waiting on, then stops reporting it', async () => {
     const gate = deferred();
     const h = harness({
-      // the orbit takes are what make the pre-flight slow: hold one open
-      ports: { multiAngleSubscribe: async () => { await gate.promise; return { video: { url: 'https://fal.media/o.mp4' } }; } },
+      // the imagining is what the pre-flight waits on now: a blot's orbit takes
+      // are shot in the background once its photograph exists
+      ports: {
+        imagineImage: async ({ imageUrl }) => {
+          await gate.promise;
+          return { url: `${imageUrl.replace(/\.png$/, '')}-imagined.png` };
+        },
+      },
     });
     const starting = h.studio.start();
-    await flush();
+    // The rail warms up in the background now, so the pre-flight's loop has to
+    // be given a few of its own turns before the rail has been driven as far as
+    // this gated port lets it go.
+    for (let turn = 0; turn < 12; turn++) await flush();
 
     expect(h.studio.status).toBe('preflight');
     const preparing = h.studio.view.preparing;
     expect(preparing).not.toBeNull();
-    expect(preparing!.target).toBe(3);
+    expect(preparing!.target).toBe(20);
     expect(preparing!.ready).toBe(0);
-    // The rail paints its blots one at a time, so the three are at three
-    // different stages while the start waits on the first: the counters still
-    // name the work, and the stage names the least-finished blot - the one
-    // actually gating the start.
-    expect(preparing!.working).toBe(3);
+    // The buffer's worth of ready blots is held up by the blots still walking
+    // their stages - that is what the rail's ceiling above its buffer is for - and
+    // the stage names the least-finished of them, the one gating the start.
+    expect(preparing!.working).toBe(28);
+    // a blot in five wins the one-in-five camera roll; here, six of the
+    // twenty-eight the rail holds
     expect(preparing!.anglesWanted).toBe(6);
-    expect(preparing!.stage).toBe('imagining');
+    expect(preparing!.stage).toBe('realising');
     expect(preparing!.elapsedMs).toBeGreaterThan(0);
 
     gate.release();
@@ -330,7 +399,12 @@ describe('InkStudio', () => {
   it('a stop during the pre-flight never opens the session it was preparing', async () => {
     const gate = deferred();
     const h = harness({
-      ports: { multiAngleSubscribe: async () => { await gate.promise; return { video: { url: 'https://fal.media/o.mp4' } }; } },
+      ports: {
+        imagineImage: async ({ imageUrl }) => {
+          await gate.promise;
+          return { url: `${imageUrl.replace(/\.png$/, '')}-imagined.png` };
+        },
+      },
     });
     const starting = h.studio.start();
     await flush();
@@ -390,15 +464,17 @@ describe('InkStudio', () => {
     expect(prompt.length).toBeGreaterThan(80);
   });
 
-  it('tells Multi Angle what the blot is a reference for, and caps the clip', async () => {
+  it('tells Multi Angle what the frame it is handed is, and caps the clip', async () => {
     const h = harness();
     await goLive(h);
     const prompt = String(h.calls.angleRequests[0]!.prompt ?? '');
-    // Multi Angle keeps the scene frozen and animates the painting it was handed
-    // unless the mood, the score and the blot's reading are sent with it
+    // Multi Angle keeps the scene frozen unless the mood, the score and the
+    // blot's reading are sent with it - and the frame it is handed is already a
+    // photograph, so nothing in the clip may turn back into paint
     expect(prompt).toContain(MOODS[h.settings.moodId].label);
     expect(prompt).toContain(MUSIC_PRESETS[h.settings.music.musicId].label);
-    expect(prompt).toMatch(/first second/);
+    expect(prompt).toMatch(/attached photograph is the shot's first frame/);
+    expect(prompt).toMatch(/no ink, no paper, no pigment/);
     expect(prompt).toMatch(/live-action photography/);
     // one clip per blot, seven seconds at the very most
     expect(h.calls.angleRequests.every((request) => request.duration <= 7)).toBe(true);
@@ -407,7 +483,8 @@ describe('InkStudio', () => {
   it('orbits through Multi Angle and hosts the arrival frames', async () => {
     const h = harness();
     await goLive(h);
-    expect(h.calls.angleRequests[0]!.resolution).toBe('480P');
+    // the orbit is cut at the stream's own tier
+    expect(h.calls.angleRequests[0]!.resolution).toBe('768P');
     expect(h.calls.angleRequests[0]!.duration).toBe(5);
     expect(h.calls.angleRequests[0]!.camera_trajectory.length).toBeGreaterThanOrEqual(2);
     // image-to-video inherits the ratio, so no aspect_ratio may be sent
@@ -463,9 +540,9 @@ describe('InkStudio', () => {
     await flush();
     const configures = h.transport.sent.filter((message) => message.type === 'configure');
     expect(configures).toHaveLength(2);
-    // with no live video element the grab yields nothing, so it opens on a view
-    // of the current blot rather than on nothing
-    expect(String(configures[1]!.image_url)).toMatch(/^https:\/\/fal\.media\//);
+    // with no live video element the grab yields nothing, so the next session
+    // opens from the prompt alone rather than cutting to a different angle
+    expect(configures[1]!.image_url).toBeUndefined();
     expect(h.studio.view.chain.sessions).toBe(2);
     expect(h.studio.view.chain.chains).toBe(1);
   });
@@ -639,12 +716,16 @@ describe('InkStudio', () => {
     // film would otherwise send one direction and wait on it forever
     const h = harness();
     await goLive(h);
-    const before = h.transport.sent.filter((message) => message.type === 'prompt').length;
+    const before = h.transport.sent.filter((message) => message.type === 'prompt');
     h.clock.value += 40_000;
     h.timer.beat();
     await flush();
-    expect(h.transport.sent.filter((message) => message.type === 'prompt').length).toBeGreaterThan(before);
-    expect(h.studio.view.warnings.some((line) => /dispatch gate/.test(line))).toBe(true);
+    const after = h.transport.sent.filter((message) => message.type === 'prompt');
+    expect(after.length).toBeGreaterThan(before.length);
+    // the blot the film was heading into is asked for again, so the lost
+    // acknowledgement does not cost the film its arrival
+    expect(after[after.length - 1]!.end_image_url).toBe(before[before.length - 1]!.end_image_url);
+    expect(h.studio.view.warnings.some((line) => /again/.test(line))).toBe(true);
   });
 
   it('tears the run down when the transport dies mid-stream', async () => {
@@ -827,11 +908,13 @@ describe('InkStudio over a long run', () => {
     const chunks = 40;
     for (let i = 0; i < chunks; i++) {
       h.transport.server(chunk({ chunk_index: i, prompt_version: 2 + i }));
-      // the heartbeat is what refills the rail in production, so drive it here
-      h.timer.beat();
-      await flush();
-      h.timer.beat();
-      await flush();
+      // The heartbeat is what refills the rail in production, and a blot is now
+      // one chunk of film rather than three - so the rail has to produce one
+      // every ten seconds, which is what the beat every second is for here.
+      for (let beat = 0; beat < 10; beat++) {
+        h.timer.beat();
+        await flush();
+      }
     }
     const prompts = h.transport.sent.filter((message) => message.type === 'prompt');
     expect(prompts.length).toBeGreaterThanOrEqual(chunks - 4);
@@ -840,10 +923,12 @@ describe('InkStudio over a long run', () => {
 
   it('keeps the film alive on a bare rail by sending continuations, not silence', async () => {
     // no heartbeat at all, so the rail never refills and stays empty after the
-    // blots prepared during pre-flight have been consumed
+    // blots prepared during pre-flight have been consumed - which is a deeper
+    // rail than it used to be: the buffer is twenty ready blots and the ceiling
+    // behind them is twenty-eight, so the chunks have to outlast the lot
     const h = harness({ settings: { budget: { sessionCapUsd: 100, dailyCapUsd: 200, sessionCapSeconds: 900, dryRun: false } } });
     await goLive(h);
-    const chunks = 30;
+    const chunks = 45;
     for (let i = 0; i < chunks; i++) h.transport.server(chunk({ chunk_index: i, prompt_version: 2 + i }));
     const prompts = h.transport.sent.filter((message) => message.type === 'prompt');
     // a direction arrives at least every few chunks, and never zero of them
@@ -872,5 +957,254 @@ describe('InkStudio over a long run', () => {
     expect(h.studio.status).toBe('live');
     expect(h.studio.view.chain.chains).toBe(4);
     expect(h.transport.sent.filter((message) => message.type === 'configure')).toHaveLength(5);
+  });
+});
+
+/**
+ * The browser pieces a seam is made of.
+ *
+ * There is no DOM in this suite, so the canvas the frame grabber draws into is
+ * stubbed here and put back afterwards: the music bed reads `document` too, and
+ * a global stub would change how it probes a track.
+ */
+function stubFrameCapture(ended: () => boolean = () => false): { frames: string[]; restore: () => void } {
+  const frames: string[] = [];
+  const scope = globalThis as unknown as { document?: unknown };
+  const previous = scope.document;
+  scope.document = {
+    createElement(tag: string) {
+      if (tag !== 'canvas') throw new Error(`unexpected element: ${tag}`);
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage: () => {} }),
+        // the label is what makes each captured frame identifiable, so a test can
+        // tell the frame in hand from the frame the picture actually ended on
+        toBlob: (callback: (blob: Blob | null) => void) => {
+          const label = `frame-${frames.length + 1}-${ended() ? 'after' : 'before'}`;
+          frames.push(label);
+          callback(new Blob([label], { type: 'image/jpeg' }));
+        },
+      };
+    },
+  };
+  return {
+    frames,
+    restore: () => {
+      if (previous === undefined) delete scope.document;
+      else scope.document = previous;
+    },
+  };
+}
+
+interface FakeVideo {
+  element: HTMLVideoElement;
+  /** Presents a frame, as a video-frame callback would report it. */
+  paint(): void;
+  /** Fires one of the element's own events. */
+  fire(type: string): void;
+}
+
+function fakeVideo(withFrameCallback = true): FakeVideo {
+  const frameCallbacks: Array<() => void> = [];
+  const listeners = new Map<string, Array<() => void>>();
+  const element: Record<string, unknown> = {
+    videoWidth: 640,
+    videoHeight: 360,
+    srcObject: null,
+    poster: '',
+    play: () => Promise.resolve(),
+    pause: () => {},
+    addEventListener: (type: string, listener: () => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+  };
+  if (withFrameCallback) {
+    element.requestVideoFrameCallback = (callback: () => void) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    };
+  }
+  return {
+    element: element as unknown as HTMLVideoElement,
+    paint() {
+      const pending = frameCallbacks.splice(0, frameCallbacks.length);
+      for (const callback of pending) callback();
+    },
+    fire(type) {
+      const pending = listeners.get(type) ?? [];
+      listeners.set(type, []);
+      for (const listener of pending) listener();
+    },
+  };
+}
+
+function fakeStream(): MediaStream {
+  return { active: true } as MediaStream;
+}
+
+/** A studio whose session is live with the player attached, as a seam starts. */
+async function liveWithVideo(options: { onClose?: () => void; ports?: Partial<StudioOptions>; video?: FakeVideo } = {}) {
+  const video = options.video ?? fakeVideo();
+  const h = harness({ onClose: options.onClose, ports: options.ports });
+  h.studio.setVideoElement(video.element);
+  await goLive(h);
+  // the session's own stream: the element the seam will read its last frame from
+  h.transport.media(fakeStream());
+  h.transport.server(chunk({ chunk_index: 0, prompt_version: 2 }));
+  await flush();
+  return { h, video };
+}
+
+/** Retires the session and lets the handover run to the point of configuring. */
+async function handOver(h: Harness): Promise<void> {
+  h.transport.server({ type: 'stream_exhausted', reason: 'session_limit', chunks: 1 });
+  await flush();
+  await flush();
+}
+
+describe('InkStudio at a session seam', () => {
+  it('opens the next session on the frame the film actually ended on', async () => {
+    const picture = { ended: false };
+    const capture = stubFrameCapture(() => picture.ended);
+    try {
+      const uploaded = new Map<string, string>();
+      const { h } = await liveWithVideo({
+        onClose: () => {
+          picture.ended = true;
+        },
+        ports: {
+          upload: async (blob, name) => {
+            uploaded.set(name, await blob.text());
+            return `https://fal.media/${name}`;
+          },
+        },
+      });
+      // the rolling frame is the one in hand when the handover is decided
+      expect(capture.frames[0]).toBe('frame-1-before');
+
+      await handOver(h);
+
+      // The picture does not stop the instant the handover is decided, so the
+      // frame it ends on is the one captured after the session closed - not the
+      // one that happened to be in hand, which is at best the same frame.
+      expect(capture.frames[1]).toBe('frame-2-after');
+      expect(uploaded.get('handover-2.jpg')).toBe('frame-2-after');
+      const configure = h.transport.sent.filter((message) => message.type === 'configure')[1]!;
+      expect(configure.image_url).toBe('https://fal.media/handover-2.jpg');
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('holds that frame over the stage until the new stream paints one', async () => {
+    const capture = stubFrameCapture();
+    try {
+      const { h, video } = await liveWithVideo();
+      await handOver(h);
+      // the next session's stream arrives empty: the stage holds the film's own
+      // last frame rather than showing a black rectangle until it paints
+      const held = h.studio.view.card;
+      expect(held).not.toBeNull();
+      expect(held!.image).toMatch(/^blob:/);
+
+      h.transport.state('live');
+      h.transport.media(fakeStream());
+      expect(h.studio.view.card).not.toBeNull();
+      video.paint();
+      expect(h.studio.view.card).toBeNull();
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('drops the held frame with the run it belonged to', async () => {
+    const capture = stubFrameCapture();
+    try {
+      const { h } = await liveWithVideo();
+      await handOver(h);
+      expect(h.studio.view.card).not.toBeNull();
+
+      await h.studio.stop('a test ended it');
+      expect(h.studio.status).toBe('ended');
+      expect(h.studio.view.card).toBeNull();
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('takes the still off the stage when the element has no frame callback', async () => {
+    const capture = stubFrameCapture();
+    try {
+      const { h, video } = await liveWithVideo({ video: fakeVideo(false) });
+      await handOver(h);
+
+      h.transport.state('live');
+      h.transport.media(fakeStream());
+      expect(h.studio.view.card).not.toBeNull();
+      video.fire('loadeddata');
+      expect(h.studio.view.card).toBeNull();
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('never leaves the film covered when the new stream paints nothing', async () => {
+    const capture = stubFrameCapture();
+    try {
+      const { h } = await liveWithVideo();
+      await handOver(h);
+      h.transport.state('live');
+      h.transport.media(fakeStream());
+      expect(h.studio.view.card).not.toBeNull();
+
+      // no frame ever lands: the backstop is what keeps a still from hiding a
+      // picture that is playing perfectly well behind it
+      h.timer.beat();
+      expect(h.studio.view.card).toBeNull();
+      expect(h.studio.view.warnings.some((line) => /not painted a frame/.test(line))).toBe(true);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('holds the opening photograph until the first session paints a frame', async () => {
+    const capture = stubFrameCapture();
+    try {
+      const video = fakeVideo();
+      const h = harness();
+      h.studio.setVideoElement(video.element);
+      const configure = await goLive(h);
+      // the film opens inside this photograph, and the stream behind it is empty
+      // until the model's first frame lands
+      expect(h.studio.view.card?.image).toBe(configure.image_url);
+      h.transport.media(fakeStream());
+      expect(h.studio.view.card?.image).toBe(configure.image_url);
+      video.paint();
+      expect(h.studio.view.card).toBeNull();
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('holds the paused picture so a resume does not open on nothing', async () => {
+    const capture = stubFrameCapture();
+    try {
+      const { h, video } = await liveWithVideo();
+      h.studio.pauseFilm();
+      await flush();
+      expect(h.studio.view.card?.image).toMatch(/^blob:/);
+
+      h.studio.resumeFilm();
+      await flush();
+      h.transport.state('live');
+      h.transport.media(fakeStream());
+      // still held: the resumed stream has not painted anything yet
+      expect(h.studio.view.card).not.toBeNull();
+      video.paint();
+      expect(h.studio.view.card).toBeNull();
+    } finally {
+      capture.restore();
+    }
   });
 });

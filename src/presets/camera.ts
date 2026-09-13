@@ -38,10 +38,10 @@ export const MIN_ANGLE_SECONDS = 5;
 /**
  * The longest one blot's clip may be.
  *
- * The clip exists to hand the film one more viewpoint of a blot, and the switch
- * from the painting to the footage is over inside its first second, so the rest
- * of it is the camera's move and nothing else: past seven seconds the model has
- * run out of move to make and invents, and every extra second is billed.
+ * The clip exists to hand the film one more viewpoint of a blot, and the frame
+ * it is handed is already a photograph, so the whole take is the camera's move
+ * and nothing else: past seven seconds the model has run out of move to make
+ * and invents, and every extra second is billed.
  */
 export const MAX_ANGLE_SECONDS = 7;
 
@@ -153,37 +153,60 @@ export const CAMERA_MOVES: Record<CameraMoveId, CameraMove> = {
 
 export const CAMERA_MOVE_IDS = Object.keys(CAMERA_MOVES) as CameraMoveId[];
 
+/**
+ * Roughly one blot in five is given a camera move.
+ *
+ * The roll is per blot and independent, so the gaps vary exactly as a 1-in-5
+ * rate implies: one blot in a row might get a move, then the next six might not.
+ */
+export const CAMERA_ANGLE_EVERY = 5;
+
+/**
+ * Length of one orbit clip, in seconds.
+ *
+ * Multi Angle accepts 5-15 seconds. The shortest is already more move than a
+ * single blot needs - the clip is a viewpoint, not a scene - and every extra
+ * second is billed.
+ */
+export const ANGLE_SECONDS = MIN_ANGLE_SECONDS;
+
+/** Multi Angle's spelling of the three stream resolution tiers. */
+export type AngleResolutionId = '480P' | '768P' | '1080P';
+
+/** The orbit resolution that matches a stream resolution, tier for tier. */
+export function angleResolutionFor(stream: '480p' | '768p' | '1080p'): AngleResolutionId {
+  return stream === '1080p' ? '1080P' : stream === '768p' ? '768P' : '480P';
+}
+
 export interface CameraConfig {
-  enabled: boolean;
-  /** Moves the radar may choose from, in preference order. */
-  moves: CameraMoveId[];
-  /** How many angle views of one blot to arrive at before moving on. 0-4. */
-  anglesPerBlot: number;
-  resolution: '480P' | '768P' | '1080P';
-  /** Multi Angle clip length in seconds, MIN_ANGLE_SECONDS-MAX_ANGLE_SECONDS. */
-  duration: number;
-  /** Multi Angle only accepts 'balanced' or 'quality'. */
-  promptExpansionMode: 'balanced' | 'quality';
-  /** Loop a blot's angle set before handing over to the next blot. */
-  repeatAngleCycle: boolean;
   /**
-   * What the next Director session starts from: the previous stream's final
-   * frame ('continue') or an angle view of the current blot ('turn').
+   * Give some blots a camera move.
+   *
+   * When on, roughly one blot in five is handed one move - rolled at random
+   * from the whole set - and one Multi Angle take is shot for it at the stream's
+   * own resolution. The move is stamped on the blot, so the reading and the
+   * direction the film's shot is given agree with the take. Every other blot is
+   * plain: no orbit, no extra cost. The seam between sessions is always the last
+   * frame, so the film never cuts to an angle.
    */
-  handoff: 'continue' | 'turn';
+  enabled: boolean;
 }
 
 export function defaultCameraConfig(): CameraConfig {
-  return {
-    enabled: true,
-    moves: ['orbit-right', 'push-in', 'crane-up'],
-    anglesPerBlot: 2,
-    resolution: '480P',
-    duration: 5,
-    promptExpansionMode: 'balanced',
-    repeatAngleCycle: false,
-    handoff: 'continue',
-  };
+  return { enabled: true };
+}
+
+/**
+ * The camera move rolled for a blot, or null for the four in five that get none.
+ *
+ * Deterministic from the blot's own seed, so the selection survives a re-run and
+ * a share code lands on the same blots. A blot that wins the roll then draws one
+ * move from the whole enabled set.
+ */
+export function cameraMoveForSeed(seed: number): CameraMoveId | null {
+  const rng = createRng(seed ^ 0x5f356495);
+  if (!rng.bool(1 / CAMERA_ANGLE_EVERY)) return null;
+  return rng.pick(CAMERA_MOVE_IDS);
 }
 
 /** Validates a trajectory against the model's documented constraints. */

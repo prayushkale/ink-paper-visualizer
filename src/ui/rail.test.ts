@@ -1,19 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { blotCard, renderRail } from './rail';
 import type { BlotView, StudioView } from '../studio/studio';
-import type { PaintFrame } from '../ink/paintReel';
 
 /** Enough of an element for a renderer: `renderRail` only writes markup. */
 function root(): HTMLElement {
   return { innerHTML: '' } as unknown as HTMLElement;
 }
-
-const frames: PaintFrame[] = [
-  { kind: 'ink', label: 'inking the paper', holdMs: 260, at: 0, uri: 'data:image/jpeg;base64,first' },
-  { kind: 'ink', label: '', holdMs: 260, at: 260, uri: 'data:image/jpeg;base64,second' },
-  { kind: 'fold-guide', label: 'folding the paper', holdMs: 440, at: 520, uri: 'data:image/jpeg;base64,crease' },
-  { kind: 'settle', label: '', holdMs: 320, at: 960, uri: 'data:image/jpeg;base64,last' },
-];
 
 function blot(overrides: Partial<BlotView> = {}): BlotView {
   return {
@@ -21,9 +13,9 @@ function blot(overrides: Partial<BlotView> = {}): BlotView {
     state: 'rendered',
     handmade: false,
     seed: 42,
-    thumb: 'data:image/jpeg;base64,thumb',
-    paint: null,
-    painting: false,
+    thumb: 'data:image/jpeg;base64,ink',
+    imagined: null,
+    inkHeld: false,
     subject: null,
     prompt: null,
     url: null,
@@ -35,53 +27,60 @@ function blot(overrides: Partial<BlotView> = {}): BlotView {
 const railView = (blots: BlotView[]): StudioView => ({ current: null, rail: blots } as StudioView);
 
 describe('blotCard', () => {
-  it('shows the painting, frame by frame, while it is playing', () => {
-    const card = blotCard(blot({ paint: frames, painting: true }), null);
-    expect(card).toMatch(/class="blot painting\b/);
-    expect(card).toContain('<span class="chip state-invented">painting</span>');
-    // the finished picture is under the reel: the last frame hands over to it
-    expect(card).toContain('data:image/jpeg;base64,thumb');
-    expect(card).toContain('class="paint-frame" src="data:image/jpeg;base64,first"');
-    expect(card).toContain('--at:520ms;--hold:440ms');
-    expect(card).toContain('class="paint-note" style="--at:520ms;--hold:440ms">folding the paper</span>');
+  it('shows the ink blot itself while its hold is still running', () => {
+    const card = blotCard(blot({ inkHeld: true, imagined: 'https://fal.media/scene.png' }), null);
+    expect(card).toContain('src="data:image/jpeg;base64,ink"');
+    expect(card).not.toContain('https://fal.media/scene.png');
+    // nothing to hand over to yet stays the blot's own picture
+    expect(card).not.toContain('ink-ref');
   });
 
-  it('does not caption the frames that are only ink arriving', () => {
-    const card = blotCard(blot({ paint: [frames[1]!], painting: true }), null);
-    expect(card).not.toContain('paint-note');
+  it('hands the card over to the photograph once the hold is over', () => {
+    const card = blotCard(blot({ state: 'ready', imagined: 'https://fal.media/scene.png' }), null);
+    expect(card).toContain('src="https://fal.media/scene.png"');
+    // the ink stays as a reference, because it is what the film was drawn from
+    expect(card).toContain('class="ink-ref" src="data:image/jpeg;base64,ink"');
   });
 
-  it('settles on the finished picture and the real state once the show is over', () => {
-    const card = blotCard(blot({ state: 'uploaded' }), null);
-    expect(card).not.toContain('paint-frame');
-    expect(card).toMatch(/class="blot uploaded\b/);
+  it('keeps the blot on the card while no photograph exists', () => {
+    const card = blotCard(blot({ state: 'uploaded', imagined: null }), null);
+    expect(card).toContain('src="data:image/jpeg;base64,ink"');
+    expect(card).not.toContain('ink-ref');
     expect(card).toContain('<span class="chip state-uploaded">hosted</span>');
+  });
+
+  it('names the realised state in the rail\'s own words', () => {
+    expect(blotCard(blot({ state: 'imagined', imagined: 'https://fal.media/s.png' }), null))
+      .toContain('<span class="chip state-imagined">realised</span>');
+  });
+
+  it('does not paint a reel over the picture', () => {
+    expect(blotCard(blot({ state: 'ready', imagined: 'https://fal.media/s.png' }), null))
+      .not.toContain('paint-frame');
   });
 });
 
 describe('renderRail', () => {
-  it('leaves a playing painting alone, then paints the state it reached', () => {
+  it('leaves a card alone while its ink hold is running', () => {
     const el = root();
-    renderRail(el, railView([blot({ paint: frames, painting: true })]));
-    const playing = el.innerHTML;
-    expect(playing).toContain('paint-frame');
+    renderRail(el, railView([blot({ inkHeld: true })]));
+    const held = el.innerHTML;
 
-    // the blot is being hosted behind its own show: that must not restart it
-    renderRail(el, railView([blot({ paint: frames, painting: true, state: 'uploaded', subject: 'a slow tide' })]));
-    expect(el.innerHTML).toBe(playing);
+    // the blot is being hosted behind its own hold: that must not rewrite it
+    renderRail(el, railView([blot({ inkHeld: true, state: 'uploaded', subject: 'a slow tide' })]));
+    expect(el.innerHTML).toBe(held);
 
-    // the show is over, so the card catches up in one write
+    // the hold is over, so the card catches up in one write
     renderRail(el, railView([blot({ state: 'uploaded', subject: 'a slow tide' })]));
-    expect(el.innerHTML).not.toContain('paint-frame');
     expect(el.innerHTML).toContain('a slow tide');
   });
 
-  it('writes when a new blot joins the rail mid-show', () => {
+  it('writes when a new blot joins the rail mid-hold', () => {
     const el = root();
-    renderRail(el, railView([blot({ paint: frames, painting: true })]));
-    const playing = el.innerHTML;
-    renderRail(el, railView([blot({ paint: frames, painting: true }), blot({ id: 'blot-2' })]));
-    expect(el.innerHTML).not.toBe(playing);
+    renderRail(el, railView([blot({ inkHeld: true })]));
+    const held = el.innerHTML;
+    renderRail(el, railView([blot({ inkHeld: true }), blot({ id: 'blot-2' })]));
+    expect(el.innerHTML).not.toBe(held);
     expect(el.innerHTML).toContain('2 on the rail');
   });
 

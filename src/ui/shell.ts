@@ -7,12 +7,13 @@ import type { InkStudio, StudioView } from '../studio/studio';
 import { renderControls, type ControlActions } from './controls';
 import { renderHud, renderPreparing, renderStatusPill, renderTelemetry } from './hud';
 import { renderRail } from './rail';
-import { renderPaintingStage } from './paint';
+import { renderArrivalCard } from './arrival';
 import { renderViewer, type ViewerModel } from './viewer';
 import { createSectionStore, isSectionId } from './sections';
 import type { UiPrefsStore } from './prefs';
 import { applyTheme, otherTheme } from './theme';
 import { estimateRun, minutesLabel, usd } from '../state';
+import { ANGLE_SECONDS, CAMERA_ANGLE_EVERY, angleResolutionFor } from '../presets/camera';
 
 /** Everything the settings column depends on, cheap enough to compare per tick. */
 function controlsKey(view: StudioView, settings: Settings): string {
@@ -49,8 +50,9 @@ export interface ShellElements {
   film: HTMLElement;
   /** The transport over a take being replayed: pause and the scrubber. */
   playback: HTMLElement;
-  /** Where a blot's own painting plays, large, while the rail is warming up. */
-  painting: HTMLElement;
+  /** The still held over the film: the blot the picture is arriving at, or the
+   *  newest picture while the rail warms up. Never animated. */
+  arrival: HTMLElement;
   /** The full-screen blot viewer, filled from the rail on demand. */
   viewer: HTMLElement;
   /** The pre-flight overlay, drawn over the film while blots are prepared. */
@@ -87,10 +89,6 @@ function clockLabel(seconds: number): string {
  * the live stream and not to a take being replayed.
  */
 const FILM_STATUSES = new Set(['preflight', 'connecting', 'live', 'chaining']);
-
-const CAMERA_MOVE_SET = new Set([
-  'orbit-right', 'orbit-left', 'push-in', 'pull-back', 'crane-up', 'fly-over', 'slow-drift',
-]);
 
 /**
  * The studio shell: one delegated listener for every control, and a render pass
@@ -259,7 +257,6 @@ export class StudioShell {
       case 'quality': if (value) this.actions.setQuality(value as never); break;
       case 'music': if (value) this.actions.setMusic(value as never); break;
       case 'music-mode': if (value) this.actions.setMusicMode(value as 'pinned' | 'generated'); break;
-      case 'camera-move': if (value) this.toggleCameraMove(value); break;
       case 'release': this.actions.releaseCurrent(); break;
       case 'reroll': this.reroll(); break;
       case 'paint': this.actions.paintThisOne(); break;
@@ -274,8 +271,6 @@ export class StudioShell {
     switch (key) {
       case 'stream.memory': this.actions.setStream({ memory: Math.round(Number(value)) }); break;
       case 'moodStrength': this.actions.setMoodStrength(Number(value)); break;
-      case 'camera.anglesPerBlot': this.actions.setCamera({ anglesPerBlot: Math.round(Number(value)) }); break;
-      case 'camera.duration': this.actions.setCamera({ duration: Math.round(Number(value)) }); break;
       case 'budget.sessionCapUsd': this.actions.setBudget({ sessionCapUsd: Number(value) }); break;
       case 'budget.dailyCapUsd': this.actions.setBudget({ dailyCapUsd: Number(value) }); break;
       case 'budget.sessionCapSeconds': this.actions.setBudget({ sessionCapSeconds: Math.round(Number(value)) }); break;
@@ -295,9 +290,6 @@ export class StudioShell {
       case 'stream.arrivalMode': this.actions.setStream({ arrivalMode: String(value) as 'hard' | 'soft' }); break;
       case 'stream.autoChain': this.actions.setStream({ autoChain: Boolean(value) }); break;
       case 'camera.enabled': this.actions.setCamera({ enabled: Boolean(value) }); break;
-      case 'camera.repeatAngleCycle': this.actions.setCamera({ repeatAngleCycle: Boolean(value) }); break;
-      case 'camera.resolution': this.actions.setCamera({ resolution: String(value) as '480P' | '768P' | '1080P' }); break;
-      case 'camera.handoff': this.actions.setCamera({ handoff: String(value) as 'continue' | 'turn' }); break;
       case 'budget.dryRun': this.actions.setBudget({ dryRun: Boolean(value) }); break;
       default: this.applyInput(key, value);
     }
@@ -497,15 +489,6 @@ export class StudioShell {
     if (toggle) toggle.textContent = player.paused ? 'Play' : 'Pause';
   }
 
-  private toggleCameraMove(move: string): void {
-    if (!CAMERA_MOVE_SET.has(move)) return;
-    const current = this.getSettings().camera.moves;
-    const next = current.includes(move as never)
-      ? current.filter((item) => item !== move)
-      : [...current, move as never];
-    this.actions.setCamera({ moves: next.length > 0 ? next : current });
-  }
-
   private reroll(): void {
     this.actions.setSeed(String(Math.floor(Math.random() * 0xffffffff)));
   }
@@ -657,18 +640,11 @@ export class StudioShell {
     renderRail(this.elements.rail, view);
     renderRail(this.elements.filmstrip, view, { compact: true });
     renderHud(this.elements.hud, view);
-    // The rail is not always on screen - a narrow window hides it and the strip
-    // below 1080px used to never show - so the blot being painted is shown large
-    // over the stage while the film has no picture yet. Once the film is live the
-    // picture itself is the thing to watch and this steps out of the way.
-    const preparing = view.status === 'preflight' || view.status === 'connecting';
-    const painting = preparing
-      ? view.rail.find((blot) => blot.painting && (blot.paint?.length ?? 0) > 0) ?? null
-      : null;
-    renderPaintingStage(
-      this.elements.painting,
-      painting?.paint ? { id: painting.id, paint: painting.paint } : null,
-    );
+    // The rail is not always on screen - a narrow window hides it - so the
+    // newest realised photograph is held over the stage while the film has no
+    // picture of its own. It is never the ink blot, and once the film is live
+    // the stream is the picture.
+    renderArrivalCard(this.elements.arrival, view.card);
     // A replay belongs to a run that is over: the moment a new session opens, or
     // the next pre-flight starts warming the rail, the element has to be free for
     // the live stream again.
@@ -731,9 +707,9 @@ export class StudioShell {
     const estimate = estimateRun({
       seconds: this.getSettings().budget.sessionCapSeconds,
       sessionCapSeconds: this.getSettings().budget.sessionCapSeconds,
-      anglesPerBlot: this.getSettings().camera.enabled ? this.getSettings().camera.anglesPerBlot : 0,
-      angleSeconds: this.getSettings().camera.duration,
-      angleResolution: this.getSettings().camera.resolution,
+      anglesPerBlot: this.getSettings().camera.enabled ? 1 / CAMERA_ANGLE_EVERY : 0,
+      angleSeconds: ANGLE_SECONDS,
+      angleResolution: angleResolutionFor(this.getSettings().stream.resolution),
     });
     if (this.watchOnly) {
       slot.innerHTML = busy

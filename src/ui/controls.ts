@@ -11,17 +11,14 @@ import {
   type Settings,
 } from '../state';
 import {
-  CAMERA_MOVES,
-  CAMERA_MOVE_IDS,
-  MAX_ANGLE_SECONDS,
-  MIN_ANGLE_SECONDS,
+  ANGLE_SECONDS,
+  CAMERA_ANGLE_EVERY,
+  angleResolutionFor,
   type CameraConfig,
-  type CameraMoveId,
 } from '../presets/camera';
 import { MOODS, MOOD_IDS, type MoodId } from '../presets/moods';
 import { MUSIC_IDS, MUSIC_PRESETS, musicById, type MusicId } from '../presets/music';
 import { BLOT_MARKS, MIN_BLOT_MARKS } from '../ink/recipe';
-import { orbitDiagram } from './rail';
 import type { StudioView } from '../studio/studio';
 
 function esc(text: string): string {
@@ -104,10 +101,11 @@ export function renderControls(
 
         <label>How a blot arrives
           <select data-change="stream.arrivalMode">
-            <option value="hard" ${settings.stream.arrivalMode === 'hard' ? 'selected' : ''}>land exactly on it (the beat resolves into the blot)</option>
+            <option value="hard" ${settings.stream.arrivalMode === 'hard' ? 'selected' : ''}>land exactly on it (the beat resolves into the photograph)</option>
             <option value="soft" ${settings.stream.arrivalMode === 'soft' ? 'selected' : ''}>describe it only (gentler, looser)</option>
           </select>
         </label>
+        <p class="muted small">An ink blot is a reference, never a picture. Each one is read by the vision model and then realised as a photograph by an image model, and it is that photograph the film opens on and arrives at.</p>
 
         <label class="check">
           <input type="checkbox" data-change="stream.autoChain" ${settings.stream.autoChain ? 'checked' : ''} />
@@ -172,39 +170,9 @@ export function renderControls(
       <div class="pad">
         <label class="check">
           <input type="checkbox" data-change="camera.enabled" ${camera.enabled ? 'checked' : ''} />
-          Orbit each blot before moving on
+          Give some blots a camera move
         </label>
-        <p class="muted small">The film arrives at the blot, then at other viewpoints of the same blot, so it reads as one object explored in 3D rather than a slideshow.</p>
-        <div class="chips">
-          ${CAMERA_MOVE_IDS.map((id) => `
-            <button class="chip-button ${camera.moves.includes(id) ? 'on' : ''}" data-action="camera-move" data-value="${id}">
-              ${CAMERA_MOVES[id].label}
-            </button>`).join('')}
-        </div>
-        ${orbitDiagram(camera.moves)}
-        <label>Angles per blot <span class="muted">${camera.anglesPerBlot}</span>
-          <input type="range" min="0" max="4" value="${camera.anglesPerBlot}" data-input="camera.anglesPerBlot" />
-        </label>
-        <label>Orbit resolution
-          <select data-change="camera.resolution">
-            ${(['480P', '768P', '1080P'] as const).map((option) => `
-              <option value="${option}" ${camera.resolution === option ? 'selected' : ''}>${option}${option === '1080P' ? ' · upscaled from 768p' : ''}</option>`).join('')}
-          </select>
-        </label>
-        <label>Orbit length <span class="muted">${camera.duration}s · seven at most</span>
-          <input type="range" min="${MIN_ANGLE_SECONDS}" max="${MAX_ANGLE_SECONDS}" value="${camera.duration}" data-input="camera.duration" />
-        </label>
-        <p class="muted small">One clip per blot. It opens on the blot and the painting is over inside its first second, so the rest of it is the camera's move and nothing else.</p>
-        <label class="check">
-          <input type="checkbox" data-change="camera.repeatAngleCycle" ${camera.repeatAngleCycle ? 'checked' : ''} />
-          Circle a blot twice before moving on
-        </label>
-        <label>At a handover, start the next session on
-          <select data-change="camera.handoff">
-            <option value="continue" ${camera.handoff === 'continue' ? 'selected' : ''}>the last frame — invisible seam</option>
-            <option value="turn" ${camera.handoff === 'turn' ? 'selected' : ''}>a different angle — a deliberate cut</option>
-          </select>
-        </label>
+        <p class="muted small">About one blot in five — picked at random, one after another, so it might be the second blot and then the ninth — is handed a camera move rolled from the whole set, and one Multi Angle take is shot for it at the stream's own resolution. The move is stamped on the blot, so the reading the vision model writes and the shot the film makes of that blot are asked for the same camera. Every other blot is plain: no orbit, no extra cost. The seam between sessions is always the last frame, so the film never cuts to a new angle.</p>
         <button class="secondary" data-action="release" ${view.current ? '' : 'disabled'}>Move on from this blot</button>
       </div>
     </details>
@@ -244,7 +212,7 @@ export function renderControls(
           <textarea rows="12" data-input="studioPrompt">${esc(settings.studioPrompt)}</textarea>
         </label>
         <button class="secondary" data-action="reset-studio-prompt">Reset this prompt</button>
-        <p class="muted small">Each blot rolls its own ${MIN_BLOT_MARKS}–${BLOT_MARKS} marks, each in its own colour and in its own place on the sheet · ${CHUNK_SECONDS}s per film destination.</p>
+        <p class="muted small">Each blot rolls its own ${MIN_BLOT_MARKS}–${BLOT_MARKS} marks, each in its own colour and in its own place on the sheet · ${CHUNK_SECONDS}s of film per blot.</p>
       </div>
     </details>`;
 }
@@ -253,12 +221,12 @@ function estimateLine(settings: Settings): string {
   const estimate = estimateRun({
     seconds: settings.budget.sessionCapSeconds,
     sessionCapSeconds: settings.budget.sessionCapSeconds,
-    anglesPerBlot: settings.camera.enabled ? settings.camera.anglesPerBlot : 0,
-    angleSeconds: settings.camera.duration,
-    angleResolution: settings.camera.resolution,
+    anglesPerBlot: settings.camera.enabled ? 1 / CAMERA_ANGLE_EVERY : 0,
+    angleSeconds: ANGLE_SECONDS,
+    angleResolution: angleResolutionFor(settings.stream.resolution),
   });
-  return `One full session of ${minutesLabel(settings.budget.sessionCapSeconds)}: ${estimate.beats} destinations over ${estimate.blots} blot${estimate.blots === 1 ? '' : 's'}, `
-    + `${estimate.angleTakes} orbit takes ≈ ${usd(estimate.totalUsd)} (Director ${usd(estimate.directorUsd)} + orbits ${usd(estimate.angleUsd)}).`;
+  return `One full session of ${minutesLabel(settings.budget.sessionCapSeconds)}: ${estimate.blots} blot${estimate.blots === 1 ? '' : 's'}, one ${CHUNK_SECONDS}s chunk each, `
+    + `${estimate.angleTakes} camera take${estimate.angleTakes === 1 ? '' : 's'} ≈ ${usd(estimate.totalUsd)} (Director ${usd(estimate.directorUsd)} + orbits ${usd(estimate.angleUsd)}).`;
 }
 
 export { DEFAULT_STUDIO_PROMPT };

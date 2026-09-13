@@ -133,7 +133,7 @@ const elements: ShellElements = {
   hud: document.getElementById('hud')!,
   film: document.getElementById('film')!,
   playback: document.getElementById('playback')!,
-  painting: document.getElementById('painting')!,
+  arrival: document.getElementById('arrival')!,
   viewer: document.getElementById('viewer')!,
   preparing: document.getElementById('preparing')!,
   controls: document.getElementById('controls')!,
@@ -173,8 +173,8 @@ function setMode(next: 'studio' | 'manual'): void {
           dropOptions,
           save: () => saveSettings(settings),
           onBrushChanged: (drop) => prefs.setBrush({ color: drop.color, radius: drop.radius, wetness: drop.wetness }),
-          onHandoff: (blob, thumbDataUri, recipe) => {
-            studio.enqueueHandmade(recipe, blob, thumbDataUri);
+          onHandoff: (blob, thumbDataUri, visionDataUri, recipe) => {
+            studio.enqueueHandmade(recipe, blob, thumbDataUri, visionDataUri);
             setMode('studio');
           },
           onExit: () => setMode('studio'),

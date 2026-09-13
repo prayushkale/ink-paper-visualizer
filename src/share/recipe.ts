@@ -1,7 +1,6 @@
 import { BLOT_MARKS, MAX_FOLDS } from '../ink/recipe';
 import { clamp, clamp01, parseSeed } from '../ink/rng';
 import { canvasForAspect, type AspectRatio, type InkRecipe, type InkToolId } from '../ink/types';
-import { CAMERA_MOVE_IDS, MAX_ANGLE_SECONDS, MIN_ANGLE_SECONDS, type CameraMoveId } from '../presets/camera';
 import { MOOD_IDS, type MoodId } from '../presets/moods';
 import { MUSIC_IDS, type MusicId } from '../presets/music';
 
@@ -16,12 +15,6 @@ export interface SharedSettings {
   musicMode: 'pinned' | 'generated';
   camera: {
     enabled: boolean;
-    moves: CameraMoveId[];
-    anglesPerBlot: number;
-    resolution: '480P' | '768P' | '1080P';
-    duration: number;
-    handoff: 'continue' | 'turn';
-    repeatAngleCycle: boolean;
   };
   stream: {
     resolution: '480p' | '768p' | '1080p';
@@ -36,12 +29,6 @@ const MAX_CODE_LENGTH = 12_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function asArrayOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T[]): T[] {
-  if (!Array.isArray(value)) return fallback;
-  const picked = value.filter((item): item is T => typeof item === 'string' && (allowed as readonly string[]).includes(item));
-  return picked.length > 0 ? [...new Set(picked)] : fallback;
 }
 
 function asIn<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -134,12 +121,6 @@ export function decodeShare(code: string, fallbackRecipe: InkRecipe): SharedSett
     musicMode: asIn(parsed.musicMode, ['pinned', 'generated'] as const, 'pinned'),
     camera: {
       enabled: camera.enabled !== false,
-      moves: asArrayOf(camera.moves, CAMERA_MOVE_IDS, ['orbit-right', 'push-in', 'crane-up']),
-      anglesPerBlot: Math.round(asNumber(camera.anglesPerBlot, 2, 0, 4)),
-      resolution: asIn(camera.resolution, ['480P', '768P', '1080P'] as const, '480P'),
-      duration: Math.round(asNumber(camera.duration, MIN_ANGLE_SECONDS, MIN_ANGLE_SECONDS, MAX_ANGLE_SECONDS)),
-      handoff: asIn(camera.handoff, ['continue', 'turn'] as const, 'continue'),
-      repeatAngleCycle: camera.repeatAngleCycle === true,
     },
     stream: {
       resolution: asIn(stream.resolution, ['480p', '768p', '1080p'] as const, '768p'),
@@ -163,5 +144,5 @@ export function readShareFromHash(hash: string, fallbackRecipe: InkRecipe): Shar
 
 /** A short human-readable label for a shared run. */
 export function describeShare(shared: SharedSettings): string {
-  return `blot #${shared.seed} · ${shared.moodId} · ${shared.musicId} · ${shared.camera.anglesPerBlot} angles`;
+  return `blot #${shared.seed} · ${shared.moodId} · ${shared.musicId} · camera ${shared.camera.enabled ? 'on' : 'off'}`;
 }

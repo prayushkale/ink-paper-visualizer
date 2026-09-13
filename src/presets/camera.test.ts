@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { CAMERA_MOVES, CAMERA_MOVE_IDS, defaultCameraConfig, validateTrajectory } from './camera';
+import {
+  ANGLE_SECONDS,
+  CAMERA_ANGLE_EVERY,
+  CAMERA_MOVES,
+  CAMERA_MOVE_IDS,
+  MAX_ANGLE_SECONDS,
+  MIN_ANGLE_SECONDS,
+  angleResolutionFor,
+  cameraMoveForSeed,
+  defaultCameraConfig,
+  validateTrajectory,
+} from './camera';
 
 const seeds = [0, 1, 7, 42, 1234, 99999];
 
@@ -121,14 +132,56 @@ describe('validateTrajectory', () => {
 });
 
 describe('defaultCameraConfig', () => {
-  it('is enabled with a small angle set and only legal expansion modes', () => {
-    const config = defaultCameraConfig();
-    expect(config.enabled).toBe(true);
-    expect(config.anglesPerBlot).toBeGreaterThanOrEqual(0);
-    expect(config.anglesPerBlot).toBeLessThanOrEqual(4);
-    expect(config.moves.every((move) => CAMERA_MOVE_IDS.includes(move))).toBe(true);
-    // Multi Angle rejects 'fast'; only these two are valid there
-    expect(['balanced', 'quality']).toContain(config.promptExpansionMode);
-    expect(config.handoff).toBe('continue');
+  it('is one switch, on by default', () => {
+    expect(defaultCameraConfig()).toEqual({ enabled: true });
+  });
+});
+
+describe('angle constants', () => {
+  it('rolls about one blot in five', () => {
+    expect(CAMERA_ANGLE_EVERY).toBe(5);
+  });
+
+  it('keeps the clip inside the range the endpoint accepts', () => {
+    expect(ANGLE_SECONDS).toBeGreaterThanOrEqual(MIN_ANGLE_SECONDS);
+    expect(ANGLE_SECONDS).toBeLessThanOrEqual(MAX_ANGLE_SECONDS);
+  });
+});
+
+describe('angleResolutionFor', () => {
+  it('matches the stream tier, tier for tier', () => {
+    expect(angleResolutionFor('480p')).toBe('480P');
+    expect(angleResolutionFor('768p')).toBe('768P');
+    expect(angleResolutionFor('1080p')).toBe('1080P');
+  });
+});
+
+describe('cameraMoveForSeed', () => {
+  const seeds = Array.from({ length: 1000 }, (_, index) => index + 1);
+
+  it('is deterministic: the same blot always rolls the same move', () => {
+    for (const seed of seeds.slice(0, 60)) {
+      expect(cameraMoveForSeed(seed)).toBe(cameraMoveForSeed(seed));
+    }
+  });
+
+  it('picks roughly one blot in five and leaves the rest plain', () => {
+    const picked = seeds.filter((seed) => cameraMoveForSeed(seed) !== null).length;
+    expect(picked / seeds.length).toBeGreaterThan(0.15);
+    expect(picked / seeds.length).toBeLessThan(0.25);
+  });
+
+  it('only ever hands out a move from the whole set', () => {
+    for (const seed of seeds) {
+      const move = cameraMoveForSeed(seed);
+      if (move) expect(CAMERA_MOVE_IDS).toContain(move);
+    }
+  });
+
+  it('spaces the picks unevenly, the way a 1-in-5 roll implies', () => {
+    const picked = seeds.filter((seed) => cameraMoveForSeed(seed) !== null);
+    const gaps = picked.slice(1).map((seed, index) => seed - picked[index]!);
+    // a fixed cycle would give one gap; an independent roll gives several
+    expect(new Set(gaps).size).toBeGreaterThan(3);
   });
 });

@@ -1,10 +1,10 @@
-import { CAMERA_MOVES, type CameraMoveId } from '../presets/camera';
-import { moodById } from '../presets/moods';
+import { ANGLE_SECONDS, CAMERA_MOVES, angleResolutionFor, type CameraMoveId } from '../presets/camera';
+import { moodById, type MoodPreset } from '../presets/moods';
 import { musicById } from '../presets/music';
 import { inkRecipeFromSeed } from '../ink/recipe';
+import type { BlotReading } from '../rail/reading';
 import { canvasForAspect, type AspectRatio, type InkRecipe } from '../ink/types';
 import type { RenderedBlot } from '../ink/render';
-import type { PaintFrame } from '../ink/paintReel';
 import { BlotRail, DEFAULT_RAIL_OPTIONS, type BlotJob, type BlotState, type RailPorts, type RailProgress } from '../rail/queue';
 import { createStudioInterpreter, type VisionCaller } from '../rail/interpreter';
 import { buildMultiAngleInput, clampAngleSeconds, type MultiAngleInput } from '../angle/multiAngle';
@@ -32,23 +32,27 @@ import type { SharedSettings } from '../share/recipe';
 /**
  * How long the pre-flight may spend warming the rail before it gives up.
  *
- * A blot needs a render, an upload, a vision call and two orbit takes, and an
- * orbit take can run into tens of seconds on its own, so a 45s ceiling fired on
- * a rail that was working perfectly well.
+ * A blot is ready only once it has been painted, hosted, read by the vision
+ * model and realised as a photograph, and twenty of them are wanted before the
+ * session opens. They are made in parallel - several vision calls at a time,
+ * several imaginings - so the wait is one pass over the slowest stage rather
+ * than twenty of them, and a 45s ceiling fired on a rail that was working
+ * perfectly well.
  */
-export const PREFLIGHT_WAIT_MS = 150_000;
+export const PREFLIGHT_WAIT_MS = 180_000;
 
 /**
  * How long the pre-flight may spend filling the buffer past the one blot it
  * needs to open.
  *
- * A blot costs about as much to prepare as three of its views take to play, so
- * a run that opens on the single blot the first pump produced is out of blots
- * inside its first minute and carries on without them. Waiting for the whole
- * buffer is free - a warming rail bills nothing - but a run still has to start,
- * so the wait for the rest of the buffer is bounded rather than open-ended.
+ * The film eats a blot every ten seconds and the buffer is twenty of them, so a
+ * run that opens on the single blot the first pump produced is out of blots
+ * inside its first minute and carries on without them. Filling the rest is work
+ * the rail was going to do anyway - it is the same blots, made a minute earlier
+ * - but a run still has to start, so the wait for the rest of the buffer is
+ * bounded rather than open-ended.
  */
-export const PREFLIGHT_BUFFER_MS = 60_000;
+export const PREFLIGHT_BUFFER_MS = 120_000;
 
 /** How often the pre-flight overlay repaints while the rail warms up. */
 export const PREFLIGHT_TICK_MS = 500;
@@ -82,13 +86,12 @@ export interface BlotView {
   seed: number;
   thumb: string;
   /**
-   * The blot's painting, a beat at a time, while it is being shown on the rail.
-   * Null once its show is over, and null for a blot that was never replayed -
-   * the card falls back to the finished picture either way.
+   * The photograph the image model made of this blot. This is the picture the
+   * film opens inside and arrives at; once it exists the card shows it.
    */
-  paint: PaintFrame[] | null;
-  /** True while that show is still running, whatever stage the blot has reached behind it. */
-  painting: boolean;
+  imagined: string | null;
+  /** True while the ink blot itself still holds the card, for BLOT_HOLD_MS. */
+  inkHeld: boolean;
   subject: string | null;
   prompt: string | null;
   url: string | null;
@@ -130,6 +133,12 @@ export interface StudioView {
     dryRun: boolean;
   };
   rail: BlotView[];
+  /**
+   * The still the stage holds while the film is being prepared: the newest
+   * realised photograph, or null. The ink blot is never shown over the film - it
+   * has its rail card and the full-screen viewer for that.
+   */
+  card: { id: string; image: string } | null;
   current: { blotId: string | null; subject: string | null; cameraLabel: string | null } | null;
   memory: string[];
   log: LogLine[];
@@ -162,6 +171,18 @@ export interface StudioOptions {
   transport: DirectorTransport;
   vision: VisionCaller;
   multiAngleSubscribe(input: MultiAngleInput): Promise<unknown>;
+  /**
+   * Turns an ink blot into the photograph the film is made of. Omitted, the rail
+   * hands the video model the blot itself, which is what every run did before
+   * the imagining existed.
+   */
+  imagineImage?(args: {
+    imageUrl: string;
+    reading: BlotReading;
+    mood: MoodPreset;
+    aspectRatio: AspectRatio;
+    seed: number;
+  }): Promise<{ url: string }>;
   upload(blob: Blob, name: string): Promise<string>;
   render(recipe: InkRecipe): Promise<RenderedBlot>;
   extractArrivalFrame(videoUrl: string): Promise<Blob>;
@@ -178,6 +199,15 @@ export interface StudioOptions {
 
 const MAX_LOG = 200;
 const HEARTBEAT_MS = 1000;
+/**
+ * How long a held still may cover the stage after a new stream has arrived.
+ *
+ * The still comes off when the stream paints its first frame, which is the
+ * picture actually taking over. This is only the backstop: a stream that never
+ * paints anything at all must not leave the film covered for the rest of the
+ * run, hiding a picture that is playing perfectly well behind it.
+ */
+const SEAM_MAX_HOLD_MS = 12_000;
 
 /**
  * One continuous film, made of chained Director sessions and fed by a rail of
@@ -220,7 +250,6 @@ export class InkStudio {
   private lastChunk: ChunkInfo | null = null;
   private bufferingUntil = 0;
   private heartbeat: unknown = null;
-  private tickCount = 0;
   private recordingResult: Recording | null = null;
   /** One recording per session, because a paused session cannot be rejoined. */
   private recordings: Recording[] = [];
@@ -237,10 +266,27 @@ export class InkStudio {
   /** True while a failed run is being torn down, so the teardown happens once. */
   private failing = false;
   /**
-   * The opening blot's own painting, shown as the player's poster until the
-   * first generated frame arrives, so the stage is never a bare black rectangle.
+   * The photograph the session opens inside, shown as the player's poster until
+   * the first generated frame arrives, so the stage is never a bare black
+   * rectangle.
    */
   private openingPoster: string | null = null;
+  /**
+   * The film's own last frame, held over the stage across a session seam.
+   *
+   * A session cannot be handed the frame its successor will end on, so every
+   * handover is a beat with no picture of its own. The element it left behind
+   * holds that frame, and the next stream arrives empty: swapping the element's
+   * source at that moment shows nothing at all. Holding the picture as a still
+   * of its own is what carries the eye across, and it comes off the moment the
+   * new stream paints a frame of its own.
+   *
+   * `owned` says whether the URL is one this studio made and has to let go of;
+   * a session's opening photograph is a hosted URL that belongs to the rail.
+   */
+  private seamStill: { url: string; owned: boolean } | null = null;
+  /** The backstop that takes the held still off if the new stream never paints. */
+  private seamTimer: unknown = null;
   /** When the current pre-flight began, for the overlay's elapsed clock. */
   private preflightStartedAt = 0;
   /** Refresh handle for the pre-flight overlay; null when no run is warming up. */
@@ -257,8 +303,8 @@ export class InkStudio {
         sessionCapUsd: options.settings.budget.sessionCapUsd,
         dailyCapUsd: options.settings.budget.dailyCapUsd,
         sessionCapSeconds: options.settings.budget.sessionCapSeconds,
-        angleResolution: options.settings.camera.resolution,
-        angleSecondsPerTake: options.settings.camera.duration,
+        angleResolution: angleResolutionFor(options.settings.stream.resolution) as AngleResolution,
+        angleSecondsPerTake: ANGLE_SECONDS,
         dryRun: options.settings.budget.dryRun,
       },
       { now: () => new Date(this.now()) },
@@ -281,15 +327,12 @@ export class InkStudio {
       caller: options.vision,
     });
     this.recorder = new StreamRecorder({ remux: options.remux, timesliceMs: 1000 });
-    this.rail = new BlotRail(this.railPorts(), {
-      ...DEFAULT_RAIL_OPTIONS,
-      preparedTarget: 3,
-      maxJobs: 8,
-      angleConcurrency: 2,
-      // the rail is the one place the run shows its work, so it paints its
-      // blots onto the rail one at a time instead of filling it instantly
-      showPainting: true,
-    });
+    // How deep the buffer is, how many blots may be in each stage at once and
+    // how much work may pile up live in one place: DEFAULT_RAIL_OPTIONS. They
+    // are one set of numbers because they only work together - a buffer of
+    // twenty on gates that admit two blots at a time is the dry rail again, and
+    // the film eats a blot every ten seconds whatever the studio thinks.
+    this.rail = new BlotRail(this.railPorts(), { ...DEFAULT_RAIL_OPTIONS });
     // an object-literal getter cannot be an arrow function, and the scheduler
     // reads live studio state, so it closes over this alias instead of `this`
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -316,7 +359,8 @@ export class InkStudio {
           ),
         onBlotAirborne: ({ blotId }) => {
           const blot = this.rail.find(blotId);
-          if (blot) this.log('info', `on screen: ${blot.reading?.subject ?? blot.id}`);
+          if (!blot) return;
+          this.log('info', `on screen: ${blot.reading?.subject ?? blot.id}`);
         },
         onBlotRetired: ({ blotId }) => {
           const blot = this.rail.find(blotId);
@@ -373,6 +417,7 @@ export class InkStudio {
         dryRun: this.budget.dryRun,
       },
       rail: this.rail.all.map((job) => this.blotView(job)),
+      card: this.cardView(),
       current: this.currentView(),
       memory: this.rail.history(6),
       log: this.logLines,
@@ -419,20 +464,18 @@ export class InkStudio {
   }
 
   private blotView(job: BlotJob): BlotView {
-    // the show outlives the stage it was painted in: a blot is usually hosted
-    // and read by the vision model while its own painting is still playing
-    const showing = job.paint !== undefined
-      && job.paint.length > 0
-      && job.showUntil !== undefined
-      && this.now() < job.showUntil;
+    // The ink blot holds the card for a beat and then hands over to the
+    // photograph the imagining made of it. While no photograph exists yet the
+    // blot simply stays: there is nothing to hand over to.
+    const inkHeld = job.inkUntil !== undefined && this.now() < job.inkUntil;
     return {
       id: job.id,
       state: job.state,
       handmade: job.handmade,
       seed: job.recipe.seed,
       thumb: job.thumbDataUri ?? '',
-      paint: showing ? job.paint! : null,
-      painting: showing,
+      imagined: job.imaginedUrl ?? null,
+      inkHeld,
       subject: job.reading?.subject ?? null,
       prompt: job.reading?.prompt ?? null,
       url: job.url ?? null,
@@ -448,16 +491,40 @@ export class InkStudio {
     };
   }
 
+  /**
+   * The still the stage holds while the film is being prepared.
+   *
+   * The stage belongs to the film: the ink blot is never shown over it. Once a
+   * run is live the picture is the thing to watch and this steps out of the way
+   * entirely; the ink blot has its rail card and the full-screen viewer, and a
+   * still of it laid over the stream only interrupts what was painted.
+   *
+   * The pre-flight still is the photograph the imagining made, never the blot:
+   * it is the picture the film is made of, so it is the honest thing to show
+   * while the rail warms up. A blot with no photograph yet simply shows nothing.
+   */
+  private cardView(): StudioView['card'] {
+    // A handover and a pre-flight are the same situation - the stage has no
+    // picture of its own - so they share the one still rather than racing each
+    // other over it. Whatever is being held wins while it is held.
+    if (this.seamStill) return { id: 'seam', image: this.seamStill.url };
+    if (this.statusValue !== 'preflight') return null;
+    const newest = [...this.rail.all].reverse().find((job) => job.imaginedUrl !== undefined);
+    if (!newest?.imaginedUrl) return null;
+    return { id: newest.id, image: newest.imaginedUrl };
+  }
+
   private currentView(): StudioView['current'] {
     const blotId = this.scheduler.currentBlotId;
     if (!blotId) return null;
     const job = this.rail.find(blotId);
     if (!job) return { blotId, subject: null, cameraLabel: null };
-    const camera = job.angles.find((take) => take.state === 'ready' && take.arrivalFrameUrl);
     return {
       blotId,
       subject: job.reading?.subject ?? null,
-      cameraLabel: camera ? CAMERA_MOVES[camera.move]?.label ?? null : null,
+      // the move rolled for this blot, not one of its takes: a take is camera
+      // work the run may not have shot, and the chip is about the film's shot
+      cameraLabel: job.cameraMove ? CAMERA_MOVES[job.cameraMove]?.label ?? null : null,
     };
   }
 
@@ -479,6 +546,21 @@ export class InkStudio {
       },
       render: (recipe) => options.render(recipe),
       upload: (blob, name) => options.upload(blob, name),
+      imagine: options.imagineImage
+        ? async ({ blot, mood }) => {
+            if (!blot.url) throw new Error('blot has no hosted image to imagine from');
+            if (!blot.reading) throw new Error('blot has not been read yet');
+            return options.imagineImage!(
+              {
+                imageUrl: blot.url,
+                reading: blot.reading,
+                mood,
+                aspectRatio: options.settings.stream.aspectRatio,
+                seed: blot.recipe.seed,
+              },
+            );
+          }
+        : undefined,
       interpret: async ({ blot, mood, music, cameraMoveId, previousPrompts, beatIndex }) => {
         if (!blot.visionDataUri) throw new Error('blot has no vision image');
         return this.interpreter({
@@ -491,27 +573,31 @@ export class InkStudio {
           moodStrength: options.settings.moodStrength,
         });
       },
-      generateAngle: async ({ blot, move, seed }) => {
+      generateAngle: async ({ blot, move, seed, imageUrl }) => {
         if (!blot.url) throw new Error('blot has no hosted image to orbit');
         const verdict = this.budget.checkBeforeAngleTake();
         if (!verdict.ok) {
           this.warn(`skipping an orbit take: ${verdict.detail}`);
           throw new Error(verdict.detail);
         }
-        const camera = options.settings.camera;
         const episode = this.episode();
-        const seconds = clampAngleSeconds(camera.duration);
+        const seconds = clampAngleSeconds(ANGLE_SECONDS);
         const input = buildMultiAngleInput({
           blotId: blot.id,
-          imageUrl: blot.url,
+          // the photograph the imagining made, never the ink: the orbit is a
+          // camera move through the film's own world
+          imageUrl,
           move,
           seed,
           duration: seconds,
-          resolution: camera.resolution,
-          promptExpansionMode: camera.promptExpansionMode,
-          // Multi Angle animates the painting it is handed unless it is told
-          // what that painting is a reference for: the mood, the score and the
-          // blot's own reading go in, and so does the one-second switch.
+          // the orbit is shot at the stream's own resolution, tier for tier
+          resolution: angleResolutionFor(options.settings.stream.resolution),
+          // Multi Angle only accepts 'balanced' and 'quality'; balanced is the
+          // one that keeps a short clip moving without inventing a second scene
+          promptExpansionMode: 'balanced',
+          // Multi Angle keeps the scene frozen unless it is told what it is
+          // looking at: the mood, the score and the blot's own reading go in,
+          // and the frame it is handed is a photograph, so nothing may paint.
           prompt: composeBlotClipPrompt({
             reading: blot.reading ?? null,
             mood: episode.mood,
@@ -533,8 +619,11 @@ export class InkStudio {
       now: () => this.now(),
       nextId: (prefix) => `${prefix}-${++this.idCounter}`,
       nextSeed: () => this.nextSeed(),
-      angleCostUsd: (seconds, resolution) =>
-        seconds * multiAngleRate((resolution as AngleResolution) ?? '480P', new Date(this.now())),
+      // one clip, cut at the run's own resolution tier
+      angleCostUsd: () => ANGLE_SECONDS * multiAngleRate(
+        angleResolutionFor(options.settings.stream.resolution) as AngleResolution,
+        new Date(this.now()),
+      ),
     };
   }
 
@@ -571,17 +660,24 @@ export class InkStudio {
     this.pausedFrameUrl = null;
     this.pauseWork = null;
     this.resuming = false;
-    this.recordings = [];
+    // a run opens on a blot, never on the last run's last frame
+    this.clearSeam();
     this.recordingResult = null;
     this.setStatus('preflight');
     this.beginPreflight();
     this.log('info', 'preparing the first blots');
     try {
-      await this.rail.pump();
+      // not awaited: a pump resolves when the whole rail stands still, and the
+      // pre-flight has its own loop below to wait on the first blot with
+      void this.rail.pump();
       this.emit();
       const opening = await this.waitForBlot();
       if (this.startCancelled) return { ok: false, error: 'stopped during the pre-flight' };
-      if (!opening || !opening.url) {
+      // The film opens on the photograph the imagining made of the blot, never on
+      // the blot: the blot is a reference, and handing it to the video model is
+      // what made every beat arrive on an animated painting.
+      const openingImage = opening?.imaginedUrl ?? opening?.url;
+      if (!opening || !openingImage) {
         this.setStatus('idle');
         return { ok: false, error: 'could not prepare a blot — check the vision model and the fal key' };
       }
@@ -599,7 +695,7 @@ export class InkStudio {
       });
       this.chain.reset();
       this.chain.setAutoChain(settings.stream.autoChain);
-      this.openSession({ worldPrompt: world, imageUrl: opening.url, audioUrl: pinned?.url ?? null, opening });
+      this.openSession({ worldPrompt: world, imageUrl: openingImage, audioUrl: pinned?.url ?? null, opening });
       this.startHeartbeat();
       this.log('info', `opening inside blot #${opening.recipe.seed}`);
       return { ok: true };
@@ -732,8 +828,12 @@ export class InkStudio {
   /** Freezes the picture, keeps its last frame, and tears the session down. */
   private async settlePause(): Promise<void> {
     this.stopHeartbeat();
+    const frame = (await this.frameGrabber?.grabNow()) ?? this.frameGrabber?.latest() ?? null;
+    // The picture the pause freezes is also the picture Play comes back to, so it
+    // stays held over the stage: a resumed session's stream arrives empty, and
+    // swapping the element's source would otherwise show nothing at all.
+    if (frame) this.holdSeamFrame(frame.blob);
     try {
-      const frame = (await this.frameGrabber?.grabNow()) ?? this.frameGrabber?.latest() ?? null;
       if (frame) {
         this.pausedFrameUrl = await this.options.upload(frame.blob, `paused-${this.chain.chainCount + 2}.jpg`);
       }
@@ -841,6 +941,8 @@ export class InkStudio {
     this.resuming = false;
     this.failing = false;
     this.startCancelled = false;
+    // the stage holds nothing while there is no film on it
+    this.clearSeam();
     // the next run starts from the configured seed again, because the settings
     // were never touched by any of this
     this.seedCounter = 0;
@@ -860,8 +962,8 @@ export class InkStudio {
   }
 
   /** Adopts a hand-painted blot into the film. */
-  enqueueHandmade(recipe: InkRecipe, blob?: Blob, thumbDataUri?: string): BlotJob {
-    const job = this.rail.adopt(recipe, thumbDataUri, blob);
+  enqueueHandmade(recipe: InkRecipe, blob?: Blob, thumbDataUri?: string, visionDataUri?: string): BlotJob {
+    const job = this.rail.adopt(recipe, thumbDataUri, blob, visionDataUri);
     this.log('info', 'a hand-painted blot joined the rail');
     void this.rail.pump().then(() => this.emit());
     this.emit();
@@ -908,8 +1010,9 @@ export class InkStudio {
       sessionCapUsd: settings.budget.sessionCapUsd,
       dailyCapUsd: settings.budget.dailyCapUsd,
       sessionCapSeconds: settings.budget.sessionCapSeconds,
-      angleResolution: settings.camera.resolution,
-      angleSecondsPerTake: settings.camera.duration,
+      // the orbit is shot at the stream's own resolution, tier for tier
+      angleResolution: angleResolutionFor(settings.stream.resolution) as AngleResolution,
+      angleSecondsPerTake: ANGLE_SECONDS,
       dryRun: settings.budget.dryRun,
     });
   }
@@ -1099,10 +1202,14 @@ export class InkStudio {
     this.budget.beginSession();
     this.chain.recordStart();
     this.statusValue = 'connecting';
-    // the picture the session opens inside: the opening blot's own painting, or
-    // the frame a chain and a resume carry over from the last session
-    this.openingPoster = input.opening?.thumbDataUri ?? input.imageUrl ?? null;
+    // the picture the session opens inside: the photograph the imagining made,
+    // or the frame a chain and a resume carry over from the last session
+    this.openingPoster = input.imageUrl ?? null;
     this.applyPoster();
+    // The film opens inside this photograph and the stream arrives empty: the
+    // still is what the stage holds until the model's first frame lands, so a
+    // session's first chunk is never painted under a black rectangle.
+    if (input.imageUrl && this.seamStill === null) this.holdSeamImage(input.imageUrl);
     session.start(buildConfigure({
       prompt: input.worldPrompt,
       imageUrl: input.imageUrl ?? undefined,
@@ -1116,7 +1223,6 @@ export class InkStudio {
     if (input.opening) this.scheduler.beginWith(input.opening);
     this.emit();
   }
-
   private handleChunk(chunk: ChunkInfo): void {
     this.lastChunk = chunk;
     // the film has a picture of its own now: the opening still has done its job
@@ -1148,31 +1254,46 @@ export class InkStudio {
     // a held frame with music still playing under it reads as a frozen film.
     this.notify('info', 'Changing the session over: the picture holds its last frame while the next one paints its first.');
     const settings = this.options.settings;
+    const currentJob = this.scheduler.currentBlotId ? this.rail.find(this.scheduler.currentBlotId) : undefined;
+    const pinnedUrl = this.pinned?.url ?? null;
+    // The newest frame in hand right now is a safety net, not the seam. The
+    // picture does not stop the moment the handover is decided - the session
+    // still has finished video waiting ahead of playback - so the element's own
+    // last frame, read once the session has stopped, is at worst this one and at
+    // best the one the next session has to continue from.
+    const beforeStop = this.frameGrabber?.latest() ?? null;
+    this.budget.commitSession();
+    const session = this.session;
+    this.session = null;
+    await session.stop();
+    // The picture has stopped and the element is holding its last frame, so this
+    // is the frame the next session has to continue from - and the same frame is
+    // what covers the seam while that session paints.
+    const ending = (await this.frameGrabber?.grabNow()) ?? beforeStop;
+    if (ending) this.holdSeamFrame(ending.blob);
     let lastFrameUrl: string | null = null;
     try {
-      const frame = (await this.frameGrabber?.grabNow()) ?? this.frameGrabber?.latest() ?? null;
-      if (frame) lastFrameUrl = await this.options.upload(frame.blob, `handover-${this.chain.chainCount + 2}.jpg`);
+      if (ending) lastFrameUrl = await this.options.upload(ending.blob, `handover-${this.chain.chainCount + 2}.jpg`);
     } catch (error) {
       this.warn(`could not capture the handover frame: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const currentJob = this.scheduler.currentBlotId ? this.rail.find(this.scheduler.currentBlotId) : undefined;
-    const angleView = currentJob?.angles.find((take) => take.state === 'ready' && take.arrivalFrameUrl)?.arrivalFrameUrl ?? null;
-    const handoff = chooseHandoffImage(settings.camera.handoff, lastFrameUrl, angleView);
-    this.log('info', `the new session opens on ${handoff.used === 'turn' ? 'a different camera angle of the same world' : 'the last frame of the last one'}`);
-    const pinnedUrl = this.pinned?.url ?? null;
+    // The seam is always the previous stream's last frame: the camera move rides
+    // inside a shot, so a session never cuts to a different angle. When no frame
+    // could be captured the next session opens from the prompt alone rather than
+    // turning the handover into a cut.
+    const handoff = chooseHandoffImage('continue', lastFrameUrl, null);
+    this.log('info', `the new session opens on ${handoff.url ? 'the last frame of the last one' : 'the prompt alone'}`);
     // The next session arrives on a new MediaStream, and a MediaRecorder cannot
     // be handed a different stream: it stops by itself when this one's tracks
-    // end, and a recorder left latched would silently swallow session N+1. So
-    // the part is closed here, before the session goes away, and the new stream
-    // opens the next one.
-    this.budget.commitSession();
+    // end, and a recorder left latched would silently swallow session N+1. The
+    // part is closed now, before the new stream opens the next one - and after
+    // the session, so the part ends on the last frame the film actually showed
+    // rather than on the frame it had in hand when the handover was decided. That
+    // is what makes two exported parts join on the same picture.
     await this.finishRecording();
     if (this.recordingResult) {
       this.log('info', `recording kept: ${this.recordingResult.container}, ${Math.round(this.recordingResult.bytes / 1024)} KB`);
     }
-    const session = this.session;
-    this.session = null;
-    await session.stop();
     // a pause that landed mid-handover wins: keep its frame and stay closed
     if (this.pausedByUser) {
       this.pausedFrameUrl = handoff.url;
@@ -1186,6 +1307,9 @@ export class InkStudio {
     // teardown starts, so it is the honest signal here.
     if (this.failing) {
       this.budget.beginSession();
+      // the run is already over and its teardown has taken the stage with it: a
+      // still held now would sit over a film that has ended
+      this.clearSeam();
       this.log('info', 'the handover was abandoned: the stream failed');
       this.emit();
       return;
@@ -1224,19 +1348,18 @@ export class InkStudio {
   }
 
   private async beat(): Promise<void> {
-    this.tickCount += 1;
     // paused means paused: no dispatch, no chaining, and no paid rail work
     if (this.statusValue === 'paused') {
       this.emit();
       return;
     }
-    if (this.tickCount % 2 === 0) {
-      try {
-        await this.rail.pump();
-      } catch (error) {
-        this.warn(`the rail stumbled: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    // Every beat, and never awaited: a blot walks its stages back to back now,
+    // so a tick that skips the pump is a second a gate that has room sits unused,
+    // while a pump that resolves only when the rail stands still - at a closed
+    // gate, until the buffer is full - must not be what the beat waits on.
+    void this.rail.pump().catch((error: unknown) => {
+      this.warn(`the rail stumbled: ${error instanceof Error ? error.message : String(error)}`);
+    });
     this.checkChain();
     this.emit();
   }
@@ -1278,7 +1401,8 @@ export class InkStudio {
    * through its opening blot before the next one was ready. The overlay promises
    * the buffer (`preparedTarget` ready blots) all along, so the wait is for that
    * - up to PREFLIGHT_BUFFER_MS of it, after which the run starts on whatever is
-   * ready rather than keeping the person waiting on an unlucky rail.
+   * ready rather than keeping the person waiting on an unlucky rail. A healthy
+   * rail fills in about a minute, so the bound is there for one that is not.
    */
   private async waitForBlot(timeoutMs = PREFLIGHT_WAIT_MS): Promise<BlotJob | null> {
     const deadline = this.now() + timeoutMs;
@@ -1292,7 +1416,10 @@ export class InkStudio {
         if (this.rail.ready.length >= target || this.now() >= bufferDeadline) return opening;
       }
       await this.sleep(250);
-      await this.rail.pump();
+      // the pre-flight is also the rail's own driver, so it keeps pumping - but
+      // never by awaiting: a stop pressed during the warm-up has to be answered
+      // on the next quarter second, not when a buffer fills
+      void this.rail.pump();
       // a blot that was just painted starts playing straight away, rather than
       // up to a heartbeat later, which would cut its show short
       this.emit();
@@ -1341,6 +1468,9 @@ export class InkStudio {
       // the heartbeat is what keeps the rail full, and a rail that fills spends
       // money on vision calls: a run that is over must stop doing either
       this.stopHeartbeat();
+      // the run is over, and the element is holding its own last frame: the still
+      // laid over it has nothing left to cover
+      this.clearSeam();
     }
     this.emit();
   }
@@ -1366,16 +1496,76 @@ export class InkStudio {
   }
 
   /**
-   * Shows the session's opening picture until the model's first frame arrives.
+   * The session's opening picture, as the element's own poster.
    *
-   * A Director session takes a while to produce its first chunk, and the player
-   * is a black rectangle until then - which reads as a broken film rather than
-   * one that is being painted. The image the session opens *inside* is the right
-   * thing to hold on screen: the first generated frame continues it.
+   * This is what shows under the still the stage holds across a seam: the element
+   * needs a picture of its own for the moment that still is let go and before the
+   * first frame of a stream has been painted - and for a run that is stopped
+   * before its stream ever arrives.
    */
   private applyPoster(): void {
     if (!this.videoElement) return;
     this.videoElement.poster = this.openingPoster ?? '';
+  }
+
+  /**
+   * Holds a picture over the stage until the film has one of its own again.
+   *
+   * The frame is held from its own blob rather than its hosted URL, so the stage
+   * never waits on an upload to stop looking dead.
+   */
+  private holdSeamFrame(blob: Blob): void {
+    this.setSeam(URL.createObjectURL(blob), true);
+  }
+
+  /** Holds an already-hosted picture, e.g. a session's own opening photograph. */
+  private holdSeamImage(url: string): void {
+    this.setSeam(url, false);
+  }
+
+  private setSeam(url: string, owned: boolean): void {
+    const previous = this.seamStill;
+    this.seamStill = { url, owned };
+    if (previous?.owned) URL.revokeObjectURL(previous.url);
+    this.emit();
+  }
+
+  /** Drops the held still and the object URL behind it. */
+  private clearSeam(): void {
+    if (this.seamTimer !== null) {
+      this.timer.clear(this.seamTimer);
+      this.seamTimer = null;
+    }
+    const held = this.seamStill;
+    this.seamStill = null;
+    if (held?.owned) URL.revokeObjectURL(held.url);
+  }
+
+  /** Eases a resumed or chained stream in: the still goes when a frame lands. */
+  private releaseSeamWhenPainted(video: HTMLVideoElement): void {
+    if (this.seamStill === null) return;
+    const painted = (): void => {
+      if (this.seamStill === null) return;
+      this.clearSeam();
+      this.emit();
+    };
+    if (this.seamTimer !== null) this.timer.clear(this.seamTimer);
+    this.seamTimer = this.timer.set(() => {
+      if (this.seamStill === null) return;
+      this.warn('the new stream has not painted a frame; taking the held still off the stage');
+      this.clearSeam();
+      this.emit();
+    }, SEAM_MAX_HOLD_MS);
+    const callbackable = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+    if (typeof callbackable.requestVideoFrameCallback === 'function') {
+      try {
+        callbackable.requestVideoFrameCallback(painted);
+        return;
+      } catch {
+        /* an implementation that refuses the call: the element's own event will do */
+      }
+    }
+    video.addEventListener('loadeddata', painted, { once: true });
   }
 
   /** Called when the WebRTC receive stream arrives. */
@@ -1384,8 +1574,12 @@ export class InkStudio {
     this.videoElement = video;
     video.srcObject = stream;
     this.applyPoster();
-    void video.play().catch(() => this.warn('playback was blocked; press play on the film once'));
+    // The watcher is registered before playback starts: a frame presented between
+    // the two would otherwise go unnoticed, and the still covering the stage would
+    // sit there until its backstop took it off.
     if (this.pausedByUser) video.pause();
+    else this.releaseSeamWhenPainted(video);
+    void video.play().catch(() => this.warn('playback was blocked; press play on the film once'));
     // a second stream (a chained session) replaces the first: two grabbers would
     // both tick against the same element
     this.frameGrabber?.dispose();
@@ -1417,15 +1611,7 @@ export class InkStudio {
       moodStrength: settings.moodStrength,
       musicId: settings.music.musicId,
       musicMode: settings.music.mode,
-      camera: {
-        enabled: settings.camera.enabled,
-        moves: settings.camera.moves,
-        anglesPerBlot: settings.camera.anglesPerBlot,
-        resolution: settings.camera.resolution,
-        duration: settings.camera.duration,
-        handoff: settings.camera.handoff,
-        repeatAngleCycle: settings.camera.repeatAngleCycle,
-      },
+      camera: { enabled: settings.camera.enabled },
       stream: {
         resolution: settings.stream.resolution,
         aspectRatio: settings.stream.aspectRatio as AspectRatio,
@@ -1502,6 +1688,7 @@ export class InkStudio {
   dispose(): void {
     this.endPreflight();
     this.stopHeartbeat();
+    this.clearSeam();
     this.frameGrabber?.dispose();
     this.recorder.reset();
     this.rail.reset();

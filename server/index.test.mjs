@@ -255,7 +255,7 @@ test('matchesAny handles the /** suffix patterns we rely on', () => {
   assert.equal(matchesAny('anything', []), true);
 });
 
-test('isAllowedProxyTarget permits director, multi angle, storage and polls', () => {
+test('isAllowedProxyTarget permits director, multi angle, the imagining, storage and polls', () => {
   const E = DEFAULT_ALLOWED_ENDPOINTS;
   assert.equal(isAllowedProxyTarget(TARGET, E), true);
   assert.equal(isAllowedProxyTarget('https://queue.fal.run/minimax/h3-max/multi-angle/image-to-video/requests/x/status', E), true);
@@ -263,6 +263,9 @@ test('isAllowedProxyTarget permits director, multi angle, storage and polls', ()
   assert.equal(isAllowedProxyTarget('https://wma.fal.run/session', E, { app_id: 'minimax/h3-max/director' }), true);
   assert.equal(isAllowedProxyTarget('https://wma.fal.run/session/heartbeat', E, {}, 'POST'), true);
   assert.equal(isAllowedProxyTarget('https://wma.fal.run/ice', E, {}, 'POST'), true);
+  // the imagining: a blot is realised as the photograph the film is made of
+  assert.equal(isAllowedProxyTarget('https://queue.fal.run/fal-ai/flux-2/turbo/edit', E), true);
+  assert.equal(isAllowedProxyTarget('https://queue.fal.run/fal-ai/flux-2/turbo/edit/requests/r1/status', E), true);
 });
 
 test('isAllowedProxyTarget refuses everything outside the allowlists', () => {
@@ -273,6 +276,8 @@ test('isAllowedProxyTarget refuses everything outside the allowlists', () => {
   assert.equal(isAllowedProxyTarget('not a url', E), false);
   assert.equal(isAllowedProxyTarget('https://api.openai.com/v1/chat', E), false);
   assert.equal(isAllowedProxyTarget('https://queue.fal.run/fal-ai/flux/dev', E), false);
+  // only the flux-2 family: the imagining is one named endpoint, not a family
+  assert.equal(isAllowedProxyTarget('https://queue.fal.run/fal-ai/flux-1/schnell', E), false);
   assert.equal(isAllowedProxyTarget('https://wma.fal.run/admin', E, {}, 'POST'), false);
   assert.equal(isAllowedProxyTarget('https://wma.fal.run/session', E, { app_id: 'fal-ai/flux' }), false);
   assert.equal(isAllowedProxyTarget('https://wma.fal.run/session', E, {}, 'GET'), false);

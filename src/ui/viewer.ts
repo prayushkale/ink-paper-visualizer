@@ -26,7 +26,11 @@ export type ViewerModel =
  * to see *that* a blot is interesting and not enough to look at one. This is the
  * same picture at the size the stage would give it, plus the reading and the
  * camera takes that the card can only compress - the hosted PNG where there is
- * one, because it is the full-size painting the video model was handed.
+ * one, because it is the full-size painting the vision model was handed.
+ *
+ * The photograph the imagining made of it is shown beside it: that is the
+ * picture the film itself is made of, and the ink blot is only ever the reference
+ * it was drawn from.
  */
 export function blotViewerMarkup(blot: BlotView): string {
   const label = BLOT_STATE_LABEL[blot.state] ?? blot.state;
@@ -40,8 +44,16 @@ export function blotViewerMarkup(blot: BlotView): string {
   return `
     <div class="viewer-backdrop" data-action="close-viewer"></div>
     <figure class="viewer-card" role="dialog" aria-modal="true" aria-label="Blot #${blot.seed}">
-      <div class="viewer-picture">
-        ${image ? `<img class="viewer-image" src="${esc(image)}" alt="ink blot #${blot.seed}" />` : '<div class="viewer-frame"></div>'}
+      <div class="viewer-pictures">
+        <div class="viewer-picture">
+          ${image ? `<img class="viewer-image" src="${esc(image)}" alt="ink blot #${blot.seed}" />` : '<div class="viewer-frame"></div>'}
+          <span class="viewer-tag">the ink it was painted as</span>
+        </div>
+        ${blot.imagined ? `
+          <div class="viewer-picture">
+            <img class="viewer-image" src="${esc(blot.imagined)}" alt="blot #${blot.seed} as the imagining made it" />
+            <span class="viewer-tag">what the film is made of</span>
+          </div>` : ''}
       </div>
       <figcaption class="viewer-body">
         <div class="viewer-head">

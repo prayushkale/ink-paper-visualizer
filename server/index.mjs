@@ -26,9 +26,15 @@ export const FAL_PROXY_ROUTE = '/api/fal/proxy';
 /**
  * Endpoint IDs the browser client may reach through the proxy.
  * `minimax/h3-max/**` covers the Director realtime app id and the Multi Angle
- * queue endpoint; the alias form covers the WMA bridge `app_id`.
+ * queue endpoint; `fal-ai/flux-2/**` is the image model that realises each blot
+ * as the photograph the film is made of; the alias form covers the WMA bridge
+ * `app_id`.
  */
-export const DEFAULT_ALLOWED_ENDPOINTS = ['minimax/h3-max/**', 'fal-ai/minimax-h3-max-director'];
+export const DEFAULT_ALLOWED_ENDPOINTS = [
+  'minimax/h3-max/**',
+  'fal-ai/minimax-h3-max-director',
+  'fal-ai/flux-2/**',
+];
 
 /** WMA signalling bridge. Only these paths are reachable on it. */
 export const SERVICE_HOST = 'wma.fal.run';
